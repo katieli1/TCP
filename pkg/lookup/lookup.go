@@ -75,6 +75,7 @@ func sendIP(dest netip.Addr, protocolNum int, data []byte) error {
 	fmt.Println(message) // so Go doesn't kill us
 
 	// 3. if match for local network in forwarding table send to that network. if match for next hop IP, consult table again, and see if you have local match for that IP
+
 	// 4. if no match anywhere, drop the packet and return an error
 	return nil
 }

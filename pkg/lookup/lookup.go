@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/google/netstack/tcpip/header"
+	"io"
 	"ip/pkg/header-parser"
 	"ip/pkg/lnxconfig"
 	"net"
@@ -28,6 +29,26 @@ func main() {
 	}
 	fileName := os.Args[1]
 	populateTable(fileName)
+
+	// for each entry point:
+	// go readConn
+
+}
+
+func readConn(entryPoint *Interface) {
+	for {
+		headerBytes := make([]byte, ipv4header.HeaderLen)
+		io.ReadFull(entryPoint.UdpConn, headerBytes)
+
+		header, err := ipv4header.ParseHeader(headerBytes)
+		if err != nil {
+			// TODO
+		}
+
+		dataBytes := make([]byte, header.TotalLen-header.Len)
+		io.ReadFull(entryPoint.UdpConn, dataBytes)
+		SendIP(header.Dst, 0, header, dataBytes)
+	}
 }
 
 func populateTable(fileName string) {
@@ -64,12 +85,9 @@ func createUdpConn(iface *Interface) {
 	iface.UdpConn = conn
 }
 
-func SendIP(dest netip.Addr, protocolNum int, data []byte) error {
+func SendIP(dest netip.Addr, protocolNum int, header *ipv4header.IPv4Header, data []byte) error {
 	//1. is the packet valid? is checksum and TTL 0? if no, drop
-	header, err := ipv4header.ParseHeader(data)
-	if err != nil {
-		return err
-	}
+
 	if header.TTL == 0 {
 		return errors.New("TTL expired")
 	}
@@ -82,16 +100,19 @@ func SendIP(dest netip.Addr, protocolNum int, data []byte) error {
 		return errors.New("checksum is bad")
 	}
 
-	// 2. is the packet for me (based on dest address)? If it’s one of “your” IPs, send up to OS
 	message := data[headerSize:]
+	// TODO: 2. is the packet for me (based on dest address)? If it’s one of “your” IPs, send up to OS
+
 	iface, exists := lookupTable[dest]
 	if exists {
+
 		iface.UdpConn.Write(message)
 	} else { // 4. if no match anywhere, drop the packet and return an error
 		return errors.New("destination IP is not known")
 	}
 
 	return nil
+
 }
 
 func ValidateChecksum(b []byte, fromHeader uint16) uint16 {

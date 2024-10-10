@@ -16,11 +16,23 @@ type Interface struct {
 	IpPrefix    netip.Prefix
 	IpAddr      netip.Addr
 	UdpAddrPort netip.AddrPort
-	UdpConn     net.Conn
+	LookupTable LookupTable // Lookup table for neighbors
 	Name        string
 }
 
-var lookupTable = make(map[netip.Addr]*Interface)
+type Neighbor struct {
+	IpPrefix      netip.Prefix
+	UdpConn       net.Conn
+	DestAddr      netip.Addr
+	UDPAddr       netip.AddrPort
+	InterfaceName string
+}
+
+type LookupTable map[netip.Addr]*Neighbor
+
+// InterfaceTable now maps netip.Prefix to Interface
+var InterfaceTable = make(map[netip.Prefix]*Interface)
+var StaticRoutes map[netip.Prefix]netip.Addr
 
 func main() {
 	if len(os.Args) != 2 {
@@ -35,14 +47,14 @@ func main() {
 
 }
 
-func readConn(entryPoint *Interface) {
+func readConn(entryPoint *Neighbor) {
 	for {
 		headerBytes := make([]byte, ipv4header.HeaderLen)
 		io.ReadFull(entryPoint.UdpConn, headerBytes)
 
 		header, err := ipv4header.ParseHeader(headerBytes)
 		if err != nil {
-			// TODO
+			// TODO: Handle error
 		}
 
 		dataBytes := make([]byte, header.TotalLen-header.Len)
@@ -52,25 +64,44 @@ func readConn(entryPoint *Interface) {
 }
 
 func populateTable(fileName string) {
-
-	// Parse the file
 	lnxConfig, err := lnxconfig.ParseConfig(fileName)
 	if err != nil {
 		panic(err)
 	}
-
-	// Populate lookup table
+	StaticRoutes = lnxConfig.StaticRoutes
 	for _, iface := range lnxConfig.Interfaces {
 		prefixForm := netip.PrefixFrom(iface.AssignedIP, iface.AssignedPrefix.Bits())
-		i := &Interface{Name: iface.Name, IpPrefix: prefixForm, IpAddr: prefixForm.Addr(), UdpAddrPort: iface.UDPAddr}
-		lookupTable[prefixForm.Addr()] = i
-		createUdpConn(i)
+		i := &Interface{
+			Name:        iface.Name,
+			IpPrefix:    prefixForm,
+			IpAddr:      prefixForm.Addr(),
+			UdpAddrPort: iface.UDPAddr,
+			LookupTable: make(LookupTable), // Initialize empty LookupTable for this Interface
+		}
+		InterfaceTable[prefixForm] = i
 	}
-
+	for _, neighbor := range lnxConfig.Neighbor {
+		// Find the matching Interface by its IpPrefix in InterfaceTable
+		for prefix, iface := range InterfaceTable {
+			if iface.Name == neighbor.InterfaceName {
+				// If names match, create a Neighbor struct
+				n := &Neighbor{
+					IpPrefix:      netip.PrefixFrom(neighbor.DestAddr, prefix.Bits()), 
+					DestAddr:      neighbor.DestAddr,
+					UDPAddr:       neighbor.UDPAddr,
+					InterfaceName: neighbor.InterfaceName,
+				}
+				// Add Neighbor to the Interface's LookupTable using the destination IP as the key
+				iface.LookupTable[neighbor.DestAddr] = n
+				createUdpConn(n)
+				break
+			}
+		}
+	}
 }
 
-func createUdpConn(iface *Interface) {
-	addrPort := iface.UdpAddrPort
+func createUdpConn(neighbor *Neighbor) {
+	addrPort := neighbor.UDPAddr
 	udpAddr := &net.UDPAddr{
 		IP:   addrPort.Addr().AsSlice(), // Convert netip.Addr to net.IP
 		Port: int(addrPort.Port()),      // Get the port from AddrPort
@@ -82,12 +113,11 @@ func createUdpConn(iface *Interface) {
 		fmt.Println("Error dialing UDP connection:", err)
 		return
 	}
-	iface.UdpConn = conn
+	neighbor.UdpConn = conn
 }
 
 func SendIP(dest netip.Addr, protocolNum int, header *ipv4header.IPv4Header, data []byte) error {
-	//1. is the packet valid? is checksum and TTL 0? if no, drop
-
+	//1. Validate the packet: check TTL and checksum
 	if header.TTL == 0 {
 		return errors.New("TTL expired")
 	}
@@ -101,21 +131,22 @@ func SendIP(dest netip.Addr, protocolNum int, header *ipv4header.IPv4Header, dat
 	}
 
 	message := data[headerSize:]
-	// TODO: 2. is the packet for me (based on dest address)? If it’s one of “your” IPs, send up to OS
-
-	iface, exists := lookupTable[dest]
-	if exists {
-
-		iface.UdpConn.Write(message)
-	} else { // 4. if no match anywhere, drop the packet and return an error
-		return errors.New("destination IP is not known")
+	for _, iface := range InterfaceTable {
+		if dest == iface.IpAddr {
+			// handle case where we reach a destination
+		}
+		if neighbor, exists := iface.LookupTable[dest]; exists {
+			neighbor.UdpConn.Write(message)
+			return nil
+		}
 	}
-
+	for prefix := range StaticRoutes{
+		//if prefix matches then
+		SendIP(StaticRoutes[prefix],protocolNum,header,data)
+	}
 	return nil
-
 }
 
 func ValidateChecksum(b []byte, fromHeader uint16) uint16 {
-	checksum := header.Checksum(b, fromHeader)
-	return checksum
+	return header.Checksum(b, fromHeader)
 }

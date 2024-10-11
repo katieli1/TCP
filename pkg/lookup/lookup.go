@@ -8,6 +8,7 @@ import (
 	"io"
 	"ip/pkg/header-parser"
 	"ip/pkg/lnxconfig"
+	"log"
 	"net"
 	"net/netip"
 	"os"
@@ -27,7 +28,7 @@ type Neighbor struct {
 	IpPrefix      netip.Prefix
 	UdpConn       net.Conn
 	DestAddr      netip.Addr
-	UDPAddr       netip.AddrPort
+	UdpAddrPort   netip.AddrPort
 	InterfaceName string
 }
 
@@ -45,9 +46,19 @@ func Initialize(fileName string) {
 
 	populateTable(fileName)
 
-	for iface := range interfaceTable {
-		for n := range interfaceTable[iface].LookupTable {
-			go readConn(interfaceTable[iface].LookupTable[n], interfaceTable[iface])
+	for i := range interfaceTable {
+		iface := interfaceTable[i]
+		fmt.Println("Addr: " + iface.UdpAddrPort.String())
+		udpAddr, err := net.ResolveUDPAddr("udp4", iface.UdpAddrPort.String())
+		if err != nil {
+			log.Panicln("Error resolving UDP address: ", err)
+		}
+		udpConn, err := net.ListenUDP("udp4", udpAddr)
+		if err != nil {
+			log.Panicln("Error setting up UDP listener: ", err)
+		}
+		for n := range iface.LookupTable {
+			go readConn(iface.LookupTable[n], iface, udpConn)
 		}
 	}
 
@@ -130,14 +141,29 @@ func REPL() {
 					fmt.Println("Error parsing IP address:", err)
 					continue
 				}
+
+				var src netip.Addr
+				for key := range interfaceTable {
+					iface := interfaceTable[key]
+					src = iface.IpAddr
+					break
+				}
+
 				// need to create header
-				header := &ipv4header.IPv4Header{Version: 4, Len: 20, TTL: 64, Dst: dest} // determining source is complicated
+				header := &ipv4header.IPv4Header{Version: 4, Len: 20, TTL: 64, Dst: dest, Src: src, TotalLen: len(words[2]) + ipv4header.HeaderLen} // determining source is complicated
 				headerBytes, err := header.Marshal()
 				if err != nil {
 
 				}
 
-				packet := append(headerBytes, []byte(words[2])...)
+				header.Checksum = int(ComputeChecksum(headerBytes))
+
+				h, err := header.Marshal()
+				if err != nil {
+
+				}
+
+				packet := append(h, []byte(words[2])...)
 				SendIP(dest, 0, packet)
 			}
 
@@ -162,11 +188,27 @@ func changeInterfaceState(up bool, words []string) {
 	}
 }
 
-func readConn(neighbor *Neighbor, iface *Interface) {
+func readConn(neighbor *Neighbor, iface *Interface, conn net.Conn) {
+
+	udpAddr, err := net.ResolveUDPAddr("udp4", iface.UdpAddrPort.String())
+	if err != nil {
+		log.Panicln("Error resolving UDP address: ", err)
+	}
+
+	udpConn, err := net.ListenUDP("udp4", udpAddr)
+	if err != nil {
+		log.Panicln("Error setting up UDP listener: ", err)
+	}
+
+	fmt.Println("iface addr: " + iface.UdpAddrPort.String())
+
 	for {
+		fmt.Println("in readConn")
 		if iface.Up {
+			fmt.Println("iface.Up")
 			headerBytes := make([]byte, ipv4header.HeaderLen)
-			io.ReadFull(neighbor.UdpConn, headerBytes)
+			io.ReadFull(udpConn, headerBytes)
+			fmt.Println("read header")
 
 			header, err := ipv4header.ParseHeader(headerBytes)
 			if err != nil {
@@ -207,20 +249,20 @@ func populateTable(fileName string) {
 				n := &Neighbor{
 					IpPrefix:      netip.PrefixFrom(neighbor.DestAddr, prefix.Bits()),
 					DestAddr:      neighbor.DestAddr,
-					UDPAddr:       neighbor.UDPAddr,
+					UdpAddrPort:   neighbor.UDPAddr,
 					InterfaceName: neighbor.InterfaceName,
 				}
 				// Add Neighbor to the Interface's LookupTable using the destination IP as the key
 				iface.LookupTable[neighbor.DestAddr] = n
 				createUdpConn(n)
-				break // assumes that a neighbor can't be routed to by multiple ifaces, which I think is fair, but leaving a note here in case - Katie
+				break // TODO: assumes that a neighbor can't be routed to by multiple ifaces, which I think is fair, but leaving a reminder to myself to doublecheck - Katie
 			}
 		}
 	}
 }
 
 func createUdpConn(neighbor *Neighbor) {
-	addrPort := neighbor.UDPAddr
+	addrPort := neighbor.UdpAddrPort
 	udpAddr := &net.UDPAddr{
 		IP:   addrPort.Addr().AsSlice(), // Convert netip.Addr to net.IP
 		Port: int(addrPort.Port()),      // Get the port from AddrPort
@@ -236,6 +278,7 @@ func createUdpConn(neighbor *Neighbor) {
 }
 
 func SendIP(dest netip.Addr, protocolNum uint8, packet []byte) error {
+	fmt.Println("in send IP")
 	header, err := ipv4header.ParseHeader(packet[:ipv4header.HeaderLen])
 	if err != nil {
 		return err
@@ -258,23 +301,44 @@ func SendIP(dest netip.Addr, protocolNum uint8, packet []byte) error {
 	for _, iface := range interfaceTable {
 
 		if dest == iface.IpAddr {
+			fmt.Println("dest == iface.IpAddr")
 			if iface.Up {
 				callback := handlerTable[protocolNum]
 				callback(string(message))
 			}
 		}
 		if neighbor, exists := iface.LookupTable[dest]; exists {
+			fmt.Println("about to write, yay")
 			neighbor.UdpConn.Write(packet)
+			fmt.Println("leaving send IP")
 			return nil
 		}
 	}
 	for prefix := range staticRoutes {
-		//if prefix matches then
-		SendIP(staticRoutes[prefix], protocolNum, packet) // TODO: fix to write to UDP conn
+		//if prefix matches dest address
+		// second lookup in the table to get interface that corresponds to address
+		fmt.Println(prefix)
+		SendIP(dest, protocolNum, packet) // TODO: fix to write to UDP conn
 	}
+
 	return nil
 }
 
 func ValidateChecksum(b []byte, fromHeader uint16) uint16 {
 	return header.Checksum(b, fromHeader)
+}
+
+// Compute the checksum using the netstack package
+func ComputeChecksum(b []byte) uint16 {
+	checksum := header.Checksum(b, 0)
+
+	// Invert the checksum value.  Why is this necessary?
+	// This function returns the inverse of the checksum
+	// on an initial computation.  While this may seem weird,
+	// it makes it easier to use this same function
+	// to validate the checksum on the receiving side.
+	// See ValidateChecksum in the receiver file for details.
+	checksumInv := checksum ^ 0xffff
+
+	return checksumInv
 }

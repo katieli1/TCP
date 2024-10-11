@@ -1,6 +1,7 @@
 package lookup
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"github.com/google/netstack/tcpip/header"
@@ -10,6 +11,7 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"strings"
 )
 
 type Interface struct {
@@ -18,6 +20,7 @@ type Interface struct {
 	UdpAddrPort netip.AddrPort
 	LookupTable LookupTable // Lookup table for neighbors
 	Name        string
+	Up          bool
 }
 
 type Neighbor struct {
@@ -31,35 +34,150 @@ type Neighbor struct {
 type LookupTable map[netip.Addr]*Neighbor
 
 // InterfaceTable now maps netip.Prefix to Interface
-var InterfaceTable = make(map[netip.Prefix]*Interface)
-var StaticRoutes map[netip.Prefix]netip.Addr
+var interfaceTable = make(map[netip.Prefix]*Interface) // I lowercased the first letters of these names to make private -Katie
+var staticRoutes map[netip.Prefix]netip.Addr
 
-func main() {
-	if len(os.Args) != 2 {
-		fmt.Printf("Usage:  %s <configFile>\n", os.Args[0])
-		os.Exit(1)
-	}
-	fileName := os.Args[1]
+type HandlerFunc func(string) // assume string for now, TODO: may need to change for RIP
+
+var handlerTable = make(map[uint8]HandlerFunc)
+
+func Initialize(fileName string) {
+
 	populateTable(fileName)
 
-	// for each entry point:
-	// go readConn
+	for iface := range interfaceTable {
+		for n := range interfaceTable[iface].LookupTable {
+			go readConn(interfaceTable[iface].LookupTable[n], interfaceTable[iface])
+		}
+	}
+
+	done := make(chan struct{})
+	go func() {
+		REPL()
+		close(done) //Signal that REPL has finished
+	}()
+
+	<-done
 
 }
 
-func readConn(entryPoint *Neighbor) {
-	for {
-		headerBytes := make([]byte, ipv4header.HeaderLen)
-		io.ReadFull(entryPoint.UdpConn, headerBytes)
+func RegisterRecvHandler(protocolNum uint8, callbackFunc HandlerFunc) error {
+	if protocolNum != 0 && protocolNum != 200 {
+		return errors.New("Invalid protocolNum")
+	}
+	handlerTable[protocolNum] = callbackFunc
+	return nil
+}
 
-		header, err := ipv4header.ParseHeader(headerBytes)
-		if err != nil {
-			// TODO: Handle error
+func REPL() {
+	fmt.Println("Welcome to the CLI! Valid commands include li, ln, lr, up <ifname>, down <ifname>, send <addr> <message ...>, and q to quit.")
+	reader := bufio.NewReader(os.Stdin)
+	for {
+		input, _ := reader.ReadString('\n')
+		input = strings.TrimSpace(input)
+
+		words := strings.Fields(input) // splits by space
+
+		if input == "q" { // quit
+			break
+		} else if input == "li" { // list interfaces
+			fmt.Println("Name    Addr/Prefix    State")
+			for key := range interfaceTable {
+				iface := interfaceTable[key]
+				state := "Up"
+				if !iface.Up {
+					state = "Down"
+				}
+				fmt.Println(iface.Name + "     " + iface.IpPrefix.String() + "    " + state)
+			}
+		} else if input == "ln" { // list neighbors
+			fmt.Println("Iface    VIP       UDPAddr")
+			for key := range interfaceTable {
+				iface := interfaceTable[key]
+				if iface.Up { // don't print neighbors for ifaces that are down
+					for neighborAddr := range iface.LookupTable {
+						udpConn := iface.LookupTable[neighborAddr].UdpConn.RemoteAddr().String() // TODO: make sure remote addr (not local) is correct
+						fmt.Println(iface.Name + "      " + neighborAddr.String() + "  " + udpConn)
+					}
+				}
+			}
+		} else if input == "lr" { // list routes
+			fmt.Println("T       Prefix        Next hop   Cost")
+			for key := range interfaceTable {
+				iface := interfaceTable[key]
+				if iface.Up { // don't print neighbors for ifaces that are down
+					for neighborAddr := range iface.LookupTable { // ONLY DOES TYPE L
+						neighbor := iface.LookupTable[neighborAddr]
+						fmt.Println("L       " + iface.IpPrefix.String() + "   " + neighbor.InterfaceName + "        0")
+					}
+
+					// TODO: S and R, NEED TO TALK ABOUT HOW TO ABSTRACT STATICROUTES TO BE HOST-ONLY
+				}
+			}
+
+		} else if words[0] == "up" {
+			changeInterfaceState(true, words)
+
+		} else if words[0] == "down" {
+			changeInterfaceState(false, words)
+
+		} else if words[0] == "send" {
+			if len(words) != 3 {
+				fmt.Println("Error: format of send command must be send <addr> <message ...>")
+			} else {
+				dest, err := netip.ParseAddr(words[1])
+				if err != nil {
+					fmt.Println("Error parsing IP address:", err)
+					continue
+				}
+				// need to create header
+				header := &ipv4header.IPv4Header{Version: 4, Len: 20, TTL: 64, Dst: dest} // determining source is complicated
+				headerBytes, err := header.Marshal()
+				if err != nil {
+
+				}
+
+				packet := append(headerBytes, []byte(words[2])...)
+				SendIP(dest, 0, packet)
+			}
+
+		} else {
+			fmt.Println("Invalid command. Valid commands include li, ln, lr, up <ifname>, down <ifname>, send <addr> <message ...>, and q to quit.")
 		}
 
-		dataBytes := make([]byte, header.TotalLen-header.Len)
-		io.ReadFull(entryPoint.UdpConn, dataBytes)
-		SendIP(header.Dst, 0, header, dataBytes)
+	}
+}
+
+func changeInterfaceState(up bool, words []string) {
+	if len(words) != 2 {
+		fmt.Println("Error: format of up command must be up <ifname>")
+	} else {
+		ifname := words[1]
+
+		for key := range interfaceTable {
+			if interfaceTable[key].Name == ifname {
+				interfaceTable[key].Up = up
+			}
+		}
+	}
+}
+
+func readConn(neighbor *Neighbor, iface *Interface) {
+	for {
+		if iface.Up {
+			headerBytes := make([]byte, ipv4header.HeaderLen)
+			io.ReadFull(neighbor.UdpConn, headerBytes)
+
+			header, err := ipv4header.ParseHeader(headerBytes)
+			if err != nil {
+				// TODO: Handle error
+			}
+
+			dataBytes := make([]byte, header.TotalLen-header.Len)
+			io.ReadFull(neighbor.UdpConn, dataBytes)
+			SendIP(header.Dst, 0, append(headerBytes, dataBytes...))
+		}
+
 	}
 }
 
@@ -68,7 +186,7 @@ func populateTable(fileName string) {
 	if err != nil {
 		panic(err)
 	}
-	StaticRoutes = lnxConfig.StaticRoutes
+	staticRoutes = lnxConfig.StaticRoutes
 	for _, iface := range lnxConfig.Interfaces {
 		prefixForm := netip.PrefixFrom(iface.AssignedIP, iface.AssignedPrefix.Bits())
 		i := &Interface{
@@ -77,16 +195,17 @@ func populateTable(fileName string) {
 			IpAddr:      prefixForm.Addr(),
 			UdpAddrPort: iface.UDPAddr,
 			LookupTable: make(LookupTable), // Initialize empty LookupTable for this Interface
+			Up:          true,
 		}
-		InterfaceTable[prefixForm] = i
+		interfaceTable[prefixForm] = i
 	}
-	for _, neighbor := range lnxConfig.Neighbor {
+	for _, neighbor := range lnxConfig.Neighbors {
 		// Find the matching Interface by its IpPrefix in InterfaceTable
-		for prefix, iface := range InterfaceTable {
+		for prefix, iface := range interfaceTable {
 			if iface.Name == neighbor.InterfaceName {
 				// If names match, create a Neighbor struct
 				n := &Neighbor{
-					IpPrefix:      netip.PrefixFrom(neighbor.DestAddr, prefix.Bits()), 
+					IpPrefix:      netip.PrefixFrom(neighbor.DestAddr, prefix.Bits()),
 					DestAddr:      neighbor.DestAddr,
 					UDPAddr:       neighbor.UDPAddr,
 					InterfaceName: neighbor.InterfaceName,
@@ -94,7 +213,7 @@ func populateTable(fileName string) {
 				// Add Neighbor to the Interface's LookupTable using the destination IP as the key
 				iface.LookupTable[neighbor.DestAddr] = n
 				createUdpConn(n)
-				break
+				break // assumes that a neighbor can't be routed to by multiple ifaces, which I think is fair, but leaving a note here in case - Katie
 			}
 		}
 	}
@@ -116,13 +235,18 @@ func createUdpConn(neighbor *Neighbor) {
 	neighbor.UdpConn = conn
 }
 
-func SendIP(dest netip.Addr, protocolNum int, header *ipv4header.IPv4Header, data []byte) error {
+func SendIP(dest netip.Addr, protocolNum uint8, packet []byte) error {
+	header, err := ipv4header.ParseHeader(packet[:ipv4header.HeaderLen])
+	if err != nil {
+		return err
+	}
 	//1. Validate the packet: check TTL and checksum
 	if header.TTL == 0 {
 		return errors.New("TTL expired")
 	}
+	// TODO: decrement TTL
 	headerSize := header.Len
-	headerBytes := data[:headerSize]
+	headerBytes := packet[:headerSize]
 	checksumFromHeader := uint16(header.Checksum)
 	computedChecksum := ValidateChecksum(headerBytes, checksumFromHeader)
 
@@ -130,19 +254,23 @@ func SendIP(dest netip.Addr, protocolNum int, header *ipv4header.IPv4Header, dat
 		return errors.New("checksum is bad")
 	}
 
-	message := data[headerSize:]
-	for _, iface := range InterfaceTable {
+	message := packet[headerSize:]
+	for _, iface := range interfaceTable {
+
 		if dest == iface.IpAddr {
-			// handle case where we reach a destination
+			if iface.Up {
+				callback := handlerTable[protocolNum]
+				callback(string(message))
+			}
 		}
 		if neighbor, exists := iface.LookupTable[dest]; exists {
-			neighbor.UdpConn.Write(message)
+			neighbor.UdpConn.Write(packet)
 			return nil
 		}
 	}
-	for prefix := range StaticRoutes{
+	for prefix := range staticRoutes {
 		//if prefix matches then
-		SendIP(StaticRoutes[prefix],protocolNum,header,data)
+		SendIP(staticRoutes[prefix], protocolNum, packet) // TODO: fix to write to UDP conn
 	}
 	return nil
 }

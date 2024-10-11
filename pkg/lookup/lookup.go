@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"github.com/google/netstack/tcpip/header"
-	"io"
 	"ip/pkg/header-parser"
 	"ip/pkg/lnxconfig"
 	"log"
@@ -153,17 +152,24 @@ func REPL() {
 				header := &ipv4header.IPv4Header{Version: 4, Len: 20, TTL: 64, Dst: dest, Src: src, TotalLen: len(words[2]) + ipv4header.HeaderLen} // determining source is complicated
 				headerBytes, err := header.Marshal()
 				if err != nil {
-
+					fmt.Println("Error marshaling header:", err)
+					return
 				}
 
 				header.Checksum = int(ComputeChecksum(headerBytes))
-
-				h, err := header.Marshal()
+				headerBytes, err = header.Marshal()
 				if err != nil {
-
+					fmt.Println("Error marshaling header after checksum:", err)
+					return
 				}
 
-				packet := append(h, []byte(words[2])...)
+				payload := []byte(words[2])
+				fmt.Printf("Marshalled header: %x\n", headerBytes) // Check header bytes
+				fmt.Printf("Payload: %x\n", payload)               // Check payload bytes
+
+				packet := append(headerBytes, payload...) // Append payload to header
+		fmt.Printf("Data bytes: %v\n", packet)          // Print bytes as slice
+		fmt.Printf("Data as string: %s\n", string(packet)) 
 				SendIP(dest, 0, packet)
 			}
 
@@ -189,39 +195,55 @@ func changeInterfaceState(up bool, words []string) {
 }
 
 func readConn(neighbor *Neighbor, iface *Interface, conn net.Conn) {
+    for {
+        fmt.Println("in readConn")
+        if iface.Up {
+            fmt.Println("iface.Up")
 
-	udpAddr, err := net.ResolveUDPAddr("udp4", iface.UdpAddrPort.String())
-	if err != nil {
-		log.Panicln("Error resolving UDP address: ", err)
-	}
+            // Read the IPv4 header
+            headerBytes := make([]byte, ipv4header.HeaderLen)
+            if _, err := readFully(conn, headerBytes); err != nil {
+                fmt.Println("Error reading header:", err)
+                continue
+            }
+            fmt.Printf("Header bytes: %v\n", headerBytes)
 
-	udpConn, err := net.ListenUDP("udp4", udpAddr)
-	if err != nil {
-		log.Panicln("Error setting up UDP listener: ", err)
-	}
+            header, err := ipv4header.ParseHeader(headerBytes)
+            if err != nil {
+                fmt.Println("Error parsing header:", err)
+                continue
+            }
 
-	fmt.Println("iface addr: " + iface.UdpAddrPort.String())
+            // Set payload length based on header (e.g., 2 bytes or variable length)
+            payloadLen := 2 // Replace with dynamic length if protocol specifies it
+            dataBytes := make([]byte, payloadLen)
+            
+            if _, err := readFully(conn, dataBytes); err != nil {
+                fmt.Println("Error reading data:", err)
+                continue
+            }
+            fmt.Printf("Data bytes: %v\n", dataBytes)
+            fmt.Printf("Data as string: %s\n", string(dataBytes))
 
-	for {
-		fmt.Println("in readConn")
-		if iface.Up {
-			fmt.Println("iface.Up")
-			headerBytes := make([]byte, ipv4header.HeaderLen)
-			io.ReadFull(udpConn, headerBytes)
-			fmt.Println("read header")
-
-			header, err := ipv4header.ParseHeader(headerBytes)
-			if err != nil {
-				// TODO: Handle error
-			}
-
-			dataBytes := make([]byte, header.TotalLen-header.Len)
-			io.ReadFull(neighbor.UdpConn, dataBytes)
-			SendIP(header.Dst, 0, append(headerBytes, dataBytes...))
-		}
-
-	}
+            SendIP(header.Dst, 0, append(headerBytes, dataBytes...))
+        }
+    }
 }
+
+// readFully reads exactly len(buf) bytes from conn into buf.
+func readFully(conn net.Conn, buf []byte) (int, error) {
+    totalRead := 0
+    for totalRead < len(buf) {
+        n, err := conn.Read(buf[totalRead:])
+        if err != nil {
+            return totalRead, err
+        }
+        totalRead += n
+    }
+    return totalRead, nil
+}
+
+
 
 func populateTable(fileName string) {
 	lnxConfig, err := lnxconfig.ParseConfig(fileName)
@@ -306,6 +328,7 @@ func SendIP(dest netip.Addr, protocolNum uint8, packet []byte) error {
 				callback := handlerTable[protocolNum]
 				callback(string(message))
 			}
+			return nil
 		}
 		if neighbor, exists := iface.LookupTable[dest]; exists {
 			fmt.Println("about to write, yay")

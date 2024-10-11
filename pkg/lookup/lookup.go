@@ -168,8 +168,8 @@ func REPL() {
 				fmt.Printf("Payload: %x\n", payload)               // Check payload bytes
 
 				packet := append(headerBytes, payload...) // Append payload to header
-		fmt.Printf("Data bytes: %v\n", packet)          // Print bytes as slice
-		fmt.Printf("Data as string: %s\n", string(packet)) 
+				fmt.Printf("Data bytes: %v\n", packet)    // Print bytes as slice
+				fmt.Printf("Data as string: %s\n", string(packet))
 				SendIP(dest, 0, packet)
 			}
 
@@ -195,55 +195,66 @@ func changeInterfaceState(up bool, words []string) {
 }
 
 func readConn(neighbor *Neighbor, iface *Interface, conn net.Conn) {
-    for {
-        fmt.Println("in readConn")
-        if iface.Up {
-            fmt.Println("iface.Up")
+	for {
+		fmt.Println("in readConn")
+		if iface.Up {
+			fmt.Println("iface.Up")
 
-            // Read the IPv4 header
-            headerBytes := make([]byte, ipv4header.HeaderLen)
-            if _, err := readFully(conn, headerBytes); err != nil {
-                fmt.Println("Error reading header:", err)
-                continue
-            }
-            fmt.Printf("Header bytes: %v\n", headerBytes)
+			// // Read the IPv4 header
+			// headerBytes := make([]byte, ipv4header.HeaderLen)
+			// if _, err := readFully(conn, headerBytes); err != nil {
+			//     fmt.Println("Error reading header:", err)
+			//     continue
+			// }
+			// fmt.Printf("Header bytes: %v\n", headerBytes)
 
-            header, err := ipv4header.ParseHeader(headerBytes)
-            if err != nil {
-                fmt.Println("Error parsing header:", err)
-                continue
-            }
+			// header, err := ipv4header.ParseHeader(headerBytes)
+			// if err != nil {
+			//     fmt.Println("Error parsing header:", err)
+			//     continue
+			// }
 
-            // Set payload length based on header (e.g., 2 bytes or variable length)
-            payloadLen := 2 // Replace with dynamic length if protocol specifies it
-            dataBytes := make([]byte, payloadLen)
-            
-            if _, err := readFully(conn, dataBytes); err != nil {
-                fmt.Println("Error reading data:", err)
-                continue
-            }
-            fmt.Printf("Data bytes: %v\n", dataBytes)
-            fmt.Printf("Data as string: %s\n", string(dataBytes))
+			// // Set payload length based on header (e.g., 2 bytes or variable length)
+			// payloadLen := 2 // Replace with dynamic length if protocol specifies it
+			// dataBytes := make([]byte, payloadLen)
 
-            SendIP(header.Dst, 0, append(headerBytes, dataBytes...))
-        }
-    }
+			// if _, err := readFully(conn, dataBytes); err != nil {
+			//     fmt.Println("Error reading data:", err)
+			//     continue
+			// }
+			// fmt.Printf("Data bytes: %v\n", dataBytes)
+			// fmt.Printf("Data as string: %s\n", string(dataBytes))
+
+			buf := make([]byte, 4096)
+			_, err := conn.Read(buf)
+
+			if err != nil {
+				// TODO
+			}
+
+			header, err := ipv4header.ParseHeader(buf[:ipv4header.HeaderLen])
+			if err != nil {
+				fmt.Println("Error parsing header:", err)
+				continue
+			}
+
+			SendIP(header.Dst, 0, buf)
+		}
+	}
 }
 
 // readFully reads exactly len(buf) bytes from conn into buf.
 func readFully(conn net.Conn, buf []byte) (int, error) {
-    totalRead := 0
-    for totalRead < len(buf) {
-        n, err := conn.Read(buf[totalRead:])
-        if err != nil {
-            return totalRead, err
-        }
-        totalRead += n
-    }
-    return totalRead, nil
+	totalRead := 0
+	for totalRead < len(buf) {
+		n, err := conn.Read(buf[totalRead:])
+		if err != nil {
+			return totalRead, err
+		}
+		totalRead += n
+	}
+	return totalRead, nil
 }
-
-
 
 func populateTable(fileName string) {
 	lnxConfig, err := lnxconfig.ParseConfig(fileName)

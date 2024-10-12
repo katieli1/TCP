@@ -14,17 +14,17 @@ import (
 	"strings"
 )
 
-type Interface struct {
+type NetworkEntry struct {
 	IpPrefix    netip.Prefix
 	IpAddr      netip.Addr
 	UdpAddrPort netip.AddrPort
 	LookupTable LookupTable // Lookup table for neighbors
 	Name        string
 	Up          bool
+	IsInterface bool // True if this is an interface entry, false if it’s a route
 }
 
 type Neighbor struct {
-	IpPrefix      netip.Prefix
 	UdpConn       net.Conn
 	DestAddr      netip.Addr
 	UdpAddrPort   netip.AddrPort
@@ -33,42 +33,39 @@ type Neighbor struct {
 
 type LookupTable map[netip.Addr]*Neighbor
 
-// InterfaceTable now maps netip.Prefix to Interface
-var interfaceTable = make(map[netip.Prefix]*Interface) // I lowercased the first letters of these names to make private -Katie
-var staticRoutes map[netip.Prefix]netip.Addr
+// Combined table for interfaces and static routes
+var networkTable = make(map[netip.Prefix]*NetworkEntry)
 
-type HandlerFunc func(string) // assume string for now, TODO: may need to change for RIP
+type HandlerFunc func(string)
 
 var handlerTable = make(map[uint8]HandlerFunc)
 
 func Initialize(fileName string) {
-
 	populateTable(fileName)
 
-	for i := range interfaceTable {
-		iface := interfaceTable[i]
-		fmt.Println("Addr: " + iface.UdpAddrPort.String())
-		udpAddr, err := net.ResolveUDPAddr("udp4", iface.UdpAddrPort.String())
-		if err != nil {
-			log.Panicln("Error resolving UDP address: ", err)
-		}
-		udpConn, err := net.ListenUDP("udp4", udpAddr)
-		if err != nil {
-			log.Panicln("Error setting up UDP listener: ", err)
-		}
-		for n := range iface.LookupTable {
-			go readConn(iface.LookupTable[n], iface, udpConn)
+	for _, entry := range networkTable {
+		if entry.IsInterface {
+			udpAddr, err := net.ResolveUDPAddr("udp4", entry.UdpAddrPort.String())
+			if err != nil {
+				log.Panicln("Error resolving UDP address: ", err)
+			}
+			udpConn, err := net.ListenUDP("udp4", udpAddr)
+			if err != nil {
+				log.Panicln("Error setting up UDP listener: ", err)
+			}
+			for n := range entry.LookupTable {
+				go readConn(entry.LookupTable[n], entry, udpConn)
+			}
 		}
 	}
 
 	done := make(chan struct{})
 	go func() {
 		REPL()
-		close(done) //Signal that REPL has finished
+		close(done)
 	}()
 
 	<-done
-
 }
 
 func RegisterRecvHandler(protocolNum uint8, callbackFunc HandlerFunc) error {
@@ -78,7 +75,6 @@ func RegisterRecvHandler(protocolNum uint8, callbackFunc HandlerFunc) error {
 	handlerTable[protocolNum] = callbackFunc
 	return nil
 }
-
 func REPL() {
 	fmt.Println("Welcome to the CLI! Valid commands include li, ln, lr, up <ifname>, down <ifname>, send <addr> <message ...>, and q to quit.")
 	reader := bufio.NewReader(os.Stdin)
@@ -92,8 +88,8 @@ func REPL() {
 			break
 		} else if input == "li" { // list interfaces
 			fmt.Println("Name    Addr/Prefix    State")
-			for key := range interfaceTable {
-				iface := interfaceTable[key]
+			for key := range networkTable {
+				iface := networkTable[key]
 				state := "Up"
 				if !iface.Up {
 					state = "Down"
@@ -102,8 +98,8 @@ func REPL() {
 			}
 		} else if input == "ln" { // list neighbors
 			fmt.Println("Iface    VIP       UDPAddr")
-			for key := range interfaceTable {
-				iface := interfaceTable[key]
+			for key := range networkTable {
+				iface := networkTable[key]
 				if iface.Up { // don't print neighbors for ifaces that are down
 					for neighborAddr := range iface.LookupTable {
 						udpConn := iface.LookupTable[neighborAddr].UdpConn.RemoteAddr().String() // TODO: make sure remote addr (not local) is correct
@@ -113,8 +109,8 @@ func REPL() {
 			}
 		} else if input == "lr" { // list routes
 			fmt.Println("T       Prefix        Next hop   Cost")
-			for key := range interfaceTable {
-				iface := interfaceTable[key]
+			for key := range networkTable {
+				iface := networkTable[key]
 				if iface.Up { // don't print neighbors for ifaces that are down
 					for neighborAddr := range iface.LookupTable { // ONLY DOES TYPE L
 						neighbor := iface.LookupTable[neighborAddr]
@@ -142,8 +138,8 @@ func REPL() {
 				}
 
 				var src netip.Addr
-				for key := range interfaceTable {
-					iface := interfaceTable[key]
+				for key := range networkTable {
+					iface := networkTable[key]
 					src = iface.IpAddr
 					break
 				}
@@ -176,7 +172,6 @@ func REPL() {
 		} else {
 			fmt.Println("Invalid command. Valid commands include li, ln, lr, up <ifname>, down <ifname>, send <addr> <message ...>, and q to quit.")
 		}
-
 	}
 }
 
@@ -186,15 +181,16 @@ func changeInterfaceState(up bool, words []string) {
 	} else {
 		ifname := words[1]
 
-		for key := range interfaceTable {
-			if interfaceTable[key].Name == ifname {
-				interfaceTable[key].Up = up
+		for key := range networkTable {
+			if networkTable[key].Name == ifname {
+				networkTable[key].Up = up
 			}
 		}
 	}
 }
 
-func readConn(neighbor *Neighbor, iface *Interface, conn net.Conn) {
+
+func readConn(neighbor *Neighbor, iface *NetworkEntry, conn net.Conn) {
 	for {
 		fmt.Println("in readConn")
 		if iface.Up {
@@ -256,44 +252,6 @@ func readFully(conn net.Conn, buf []byte) (int, error) {
 	return totalRead, nil
 }
 
-func populateTable(fileName string) {
-	lnxConfig, err := lnxconfig.ParseConfig(fileName)
-	if err != nil {
-		panic(err)
-	}
-	staticRoutes = lnxConfig.StaticRoutes
-	for _, iface := range lnxConfig.Interfaces {
-		prefixForm := netip.PrefixFrom(iface.AssignedIP, iface.AssignedPrefix.Bits())
-		i := &Interface{
-			Name:        iface.Name,
-			IpPrefix:    prefixForm,
-			IpAddr:      prefixForm.Addr(),
-			UdpAddrPort: iface.UDPAddr,
-			LookupTable: make(LookupTable), // Initialize empty LookupTable for this Interface
-			Up:          true,
-		}
-		interfaceTable[prefixForm] = i
-	}
-	for _, neighbor := range lnxConfig.Neighbors {
-		// Find the matching Interface by its IpPrefix in InterfaceTable
-		for prefix, iface := range interfaceTable {
-			if iface.Name == neighbor.InterfaceName {
-				// If names match, create a Neighbor struct
-				n := &Neighbor{
-					IpPrefix:      netip.PrefixFrom(neighbor.DestAddr, prefix.Bits()),
-					DestAddr:      neighbor.DestAddr,
-					UdpAddrPort:   neighbor.UDPAddr,
-					InterfaceName: neighbor.InterfaceName,
-				}
-				// Add Neighbor to the Interface's LookupTable using the destination IP as the key
-				iface.LookupTable[neighbor.DestAddr] = n
-				createUdpConn(n)
-				break // TODO: assumes that a neighbor can't be routed to by multiple ifaces, which I think is fair, but leaving a reminder to myself to doublecheck - Katie
-			}
-		}
-	}
-}
-
 func createUdpConn(neighbor *Neighbor) {
 	addrPort := neighbor.UdpAddrPort
 	udpAddr := &net.UDPAddr{
@@ -309,18 +267,17 @@ func createUdpConn(neighbor *Neighbor) {
 	}
 	neighbor.UdpConn = conn
 }
-
 func SendIP(dest netip.Addr, protocolNum uint8, packet []byte) error {
 	fmt.Println("in send IP")
 	header, err := ipv4header.ParseHeader(packet[:ipv4header.HeaderLen])
 	if err != nil {
 		return err
 	}
-	//1. Validate the packet: check TTL and checksum
+	
 	if header.TTL == 0 {
 		return errors.New("TTL expired")
 	}
-	// TODO: decrement TTL
+
 	headerSize := header.Len
 	headerBytes := packet[:headerSize]
 	checksumFromHeader := uint16(header.Checksum)
@@ -331,31 +288,82 @@ func SendIP(dest netip.Addr, protocolNum uint8, packet []byte) error {
 	}
 
 	message := packet[headerSize:]
-	for _, iface := range interfaceTable {
+	var bestMatch *NetworkEntry
 
-		if dest == iface.IpAddr {
-			fmt.Println("dest == iface.IpAddr")
-			if iface.Up {
+	// Iterate through the networkTable to find the longest prefix match
+	for prefix, entry := range networkTable {
+		if prefix.Contains(dest) {
+			if header.Dst == networkTable[prefix].IpAddr{
 				callback := handlerTable[protocolNum]
 				callback(string(message))
+				return nil
+			}
+			if bestMatch == nil || prefix.Bits() > bestMatch.IpPrefix.Bits() {
+				bestMatch = entry
+			}
+		}
+	}
+
+	if bestMatch != nil {
+		fmt.Println("in best match")
+		if bestMatch.IsInterface {
+			if bestMatch.Up {
+				if neighbor, exists := bestMatch.LookupTable[dest]; exists {
+					neighbor.UdpConn.Write(packet)
+					return nil
+				}
 			}
 			return nil
 		}
-		if neighbor, exists := iface.LookupTable[dest]; exists {
-			fmt.Println("about to write, yay")
-			neighbor.UdpConn.Write(packet)
-			fmt.Println("leaving send IP")
-			return nil
-		}
-	}
-	for prefix := range staticRoutes {
-		//if prefix matches dest address
-		// second lookup in the table to get interface that corresponds to address
-		fmt.Println(prefix)
-		SendIP(dest, protocolNum, packet) // TODO: fix to write to UDP conn
+		SendIP(bestMatch.IpAddr, protocolNum, packet)
 	}
 
-	return nil
+	return errors.New("no valid route found")
+}
+
+// Populate the combined networkTable
+func populateTable(fileName string) {
+	lnxConfig, err := lnxconfig.ParseConfig(fileName)
+	if err != nil {
+		panic(err)
+	}
+	
+	for _, iface := range lnxConfig.Interfaces {
+		prefixForm := netip.PrefixFrom(iface.AssignedIP, iface.AssignedPrefix.Bits())
+		entry := &NetworkEntry{
+			Name:        iface.Name,
+			IpPrefix:    prefixForm,
+			IpAddr:      prefixForm.Addr(),
+			UdpAddrPort: iface.UDPAddr,
+			LookupTable: make(LookupTable),
+			Up:          true,
+			IsInterface: true,
+		}
+		networkTable[prefixForm] = entry
+	}
+
+	for _, neighbor := range lnxConfig.Neighbors {
+		for _, entry := range networkTable {
+			if entry.Name == neighbor.InterfaceName {
+				n := &Neighbor{
+					DestAddr:      neighbor.DestAddr,
+					UdpAddrPort:   neighbor.UDPAddr,
+					InterfaceName: neighbor.InterfaceName,
+				}
+				entry.LookupTable[neighbor.DestAddr] = n
+				createUdpConn(n)
+				break
+			}
+		}
+	}
+
+	for prefix, nextHop := range lnxConfig.StaticRoutes {
+		networkTable[prefix] = &NetworkEntry{
+			IpPrefix:    prefix,
+			IpAddr:      nextHop, // Next hop for static route
+			IsInterface: false,   // Not an interface, it's a static route
+		}
+	}
 }
 
 func ValidateChecksum(b []byte, fromHeader uint16) uint16 {

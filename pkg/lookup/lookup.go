@@ -137,19 +137,13 @@ func callback(message string, nextHop netip.Addr) {
 	}
 
 	for _, route := range routes {
-		// prefix := netip.PrefixFrom(route.Address, route.PrefixLength)
+		prefix := netip.PrefixFrom(route.Address, route.PrefixLength)
 
-		// if entry, exists := networkTable[prefix]; exists {
+		if entry, exists := networkTable[prefix]; exists {
 
 		// for our entry points
 		// if one contains next hop as an address then set it to current entry point
-		var entry *NetworkEntry
-		for addr := range networkTable {
-			e, exists := networkTable[addr]
-			if exists {
-				entry = e
-			}
-		}
+
 
 		if neighbor, found := entry.LookupTable[route.Address]; found {
 			// Update cost if the new path is shorter
@@ -167,24 +161,24 @@ func callback(message string, nextHop netip.Addr) {
 				WillHop:  true,
 			}
 		}
-		// } else {
-		// 	// Add a new entry to the networkTable
-		// 	newEntry := &NetworkEntry{
-		// 		IpPrefix:    prefix,
-		// 		IpAddr:      nextHop, // Set correct IP address
-		// 		LookupTable: make(map[netip.Addr]*Neighbor),
-		// 		Up:          true,
-		// 		IsDefault:   false,
-		// 	}
-		// 	newEntry.LookupTable[route.Address] = &Neighbor{
-		// 		DestAddr: route.Address,
-		// 		Cost:     route.Cost + 1,
-		// 		IpPrefix: prefix,
-		// 		NextHop:  nextHop,
-		// 		WillHop:  true,
-		// 	}
-		// 	networkTable[prefix] = newEntry
-		// }
+		} else {
+			// Add a new entry to the networkTable
+			newEntry := &NetworkEntry{
+				IpPrefix:    prefix,
+				IpAddr:      nextHop, // Set correct IP address
+				LookupTable: make(map[netip.Addr]*Neighbor),
+				Up:          true,
+				IsDefault:   false,
+			}
+			newEntry.LookupTable[route.Address] = &Neighbor{
+				DestAddr: route.Address,
+				Cost:     route.Cost + 1,
+				IpPrefix: prefix,
+				NextHop:  nextHop,
+				WillHop:  true,
+			}
+			networkTable[prefix] = newEntry
+		}
 	}
 }
 

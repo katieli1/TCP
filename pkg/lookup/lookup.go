@@ -122,10 +122,10 @@ func callback(message string, nextHop netip.Addr) {
 			fmt.Println("Invalid prefix length:", fields[1])
 			continue
 		}
-
-		addr, err := netip.ParseAddr(fields[2])
+		//fmt.Printf("Trying to parse address: '%s', Bytes: %v\n", fields[2], []byte(fields[2]))
+		addr, err := netip.ParseAddr(strings.TrimSpace(strings.ReplaceAll(fields[2], "\x00", "")))
 		if err != nil {
-			fmt.Println("Invalid address:", fields[2]) // Log invalid addresses
+			fmt.Println("Invalid address:" + fields[2] + " Error: " + err.Error()) // Log invalid addresses
 			continue
 		}
 
@@ -134,6 +134,7 @@ func callback(message string, nextHop netip.Addr) {
 			PrefixLength: prefixLength,
 			Address:      addr,
 		})
+		fmt.Println("receiving address " + addr.String())
 	}
 
 	for _, route := range routes {
@@ -141,26 +142,25 @@ func callback(message string, nextHop netip.Addr) {
 
 		if entry, exists := networkTable[prefix]; exists {
 
-		// for our entry points
-		// if one contains next hop as an address then set it to current entry point
+			// for our entry points
+			// if one contains next hop as an address then set it to current entry point
 
-
-		if neighbor, found := entry.LookupTable[route.Address]; found {
-			// Update cost if the new path is shorter
-			if neighbor.NextHop == nextHop || neighbor.Cost > route.Cost+1 {
-				neighbor.Cost = route.Cost + 1
-				neighbor.NextHop = nextHop
+			if neighbor, found := entry.LookupTable[route.Address]; found {
+				// Update cost if the new path is shorter
+				if neighbor.NextHop == nextHop || neighbor.Cost > route.Cost+1 {
+					neighbor.Cost = route.Cost + 1
+					neighbor.NextHop = nextHop
+				}
+			} else {
+				prefix := netip.PrefixFrom(route.Address, route.PrefixLength)
+				entry.LookupTable[route.Address] = &Neighbor{
+					DestAddr: route.Address,
+					Cost:     route.Cost + 1,
+					IpPrefix: prefix,
+					NextHop:  nextHop,
+					WillHop:  true,
+				}
 			}
-		} else {
-			prefix := netip.PrefixFrom(route.Address, route.PrefixLength)
-			entry.LookupTable[route.Address] = &Neighbor{
-				DestAddr: route.Address,
-				Cost:     route.Cost + 1,
-				IpPrefix: prefix,
-				NextHop:  nextHop,
-				WillHop:  true,
-			}
-		}
 		} else {
 			// Add a new entry to the networkTable
 			newEntry := &NetworkEntry{
@@ -407,19 +407,6 @@ func readConn(iface *NetworkEntry, conn net.Conn) {
 			SendIP(header.Dst, protocol, buf)
 		}
 	}
-}
-
-// readFully reads exactly len(buf) bytes from conn into buf.
-func readFully(conn net.Conn, buf []byte) (int, error) {
-	totalRead := 0
-	for totalRead < len(buf) {
-		n, err := conn.Read(buf[totalRead:])
-		if err != nil {
-			return totalRead, err
-		}
-		totalRead += n
-	}
-	return totalRead, nil
 }
 
 func createUdpConn(neighbor *Neighbor) {

@@ -274,8 +274,10 @@ func REPL() {
 				iface := networkTable[key]
 				if iface.Up { // don't print neighbors for ifaces that are down
 					for neighborAddr := range iface.LookupTable {
-						udpConn := iface.LookupTable[neighborAddr].UdpConn.RemoteAddr().String() // TODO: make sure remote addr (not local) is correct
-						fmt.Println(iface.Name + "      " + neighborAddr.String() + "  " + udpConn)
+						// udpConn := iface.LookupTable[neighborAddr].UdpConn.RemoteAddr().String() // TODO: make sure remote addr (not local) is correct
+						// fmt.Println(iface.Name + "      " + neighborAddr.String() + "  " + udpConn)
+						nextHop := iface.LookupTable[neighborAddr].NextHop
+						fmt.Println(iface.Name + "      " + "Address " + neighborAddr.String() + " Prefix " + neighborAddr.String() + " Next hop " + nextHop.String())
 					}
 				}
 			}
@@ -425,6 +427,7 @@ func createUdpConn(neighbor *Neighbor) {
 	neighbor.UdpConn = conn
 }
 func SendIP(dest netip.Addr, protocolNum uint8, packet []byte) error {
+	fmt.Println("start of send IP")
 	header, err := ipv4header.ParseHeader(packet[:ipv4header.HeaderLen])
 	if err != nil {
 		return err

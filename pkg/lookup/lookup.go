@@ -39,6 +39,9 @@ var networkTable = make(map[netip.Prefix]*NetworkEntry)
 type HandlerFunc func(string)
 
 var handlerTable = make(map[uint8]HandlerFunc)
+var isRouter bool
+
+const maxPacketSize = 4096
 
 func Initialize(fileName string) {
 	populateTable(fileName)
@@ -53,8 +56,8 @@ func Initialize(fileName string) {
 			if err != nil {
 				log.Panicln("Error setting up UDP listener: ", err)
 			}
-			for n := range entry.LookupTable {
-				go readConn(entry.LookupTable[n], entry, udpConn)
+			for range entry.LookupTable {
+				go readConn(entry, udpConn)
 			}
 		}
 	}
@@ -82,7 +85,7 @@ func REPL() {
 		input, _ := reader.ReadString('\n')
 		input = strings.TrimSpace(input)
 
-		words := strings.Fields(input) // splits by space
+		words := strings.SplitN(input, " ", 3) // splits on the first 2 spaces
 
 		if input == "q" { // quit
 			break
@@ -112,12 +115,22 @@ func REPL() {
 			for key := range networkTable {
 				iface := networkTable[key]
 				if iface.Up { // don't print neighbors for ifaces that are down
-					for neighborAddr := range iface.LookupTable { // ONLY DOES TYPE L
+					var t string
+					if iface.IsInterface {
+						t = "L       "
+					} else {
+						if isRouter {
+							t = "R       "
+						} else {
+							t = "S       "
+						}
+					}
+					for neighborAddr := range iface.LookupTable {
 						neighbor := iface.LookupTable[neighborAddr]
-						fmt.Println("L       " + iface.IpPrefix.String() + "   " + neighbor.InterfaceName + "        0")
+
+						fmt.Println(t + iface.IpPrefix.String() + "   " + neighbor.InterfaceName + "        0")
 					}
 
-					// TODO: S and R, NEED TO TALK ABOUT HOW TO ABSTRACT STATICROUTES TO BE HOST-ONLY
 				}
 			}
 
@@ -160,12 +173,12 @@ func REPL() {
 				}
 
 				payload := []byte(words[2])
-				fmt.Printf("Marshalled header: %x\n", headerBytes) // Check header bytes
-				fmt.Printf("Payload: %x\n", payload)               // Check payload bytes
+				// fmt.Printf("Marshalled header: %x\n", headerBytes) // Check header bytes
+				// fmt.Printf("Payload: %x\n", payload)               // Check payload bytes
 
 				packet := append(headerBytes, payload...) // Append payload to header
-				fmt.Printf("Data bytes: %v\n", packet)    // Print bytes as slice
-				fmt.Printf("Data as string: %s\n", string(packet))
+				// fmt.Printf("Data bytes: %v\n", packet)    // Print bytes as slice
+				// fmt.Printf("Data as string: %s\n", string(packet))
 				SendIP(dest, 0, packet)
 			}
 
@@ -177,7 +190,11 @@ func REPL() {
 
 func changeInterfaceState(up bool, words []string) {
 	if len(words) != 2 {
-		fmt.Println("Error: format of up command must be up <ifname>")
+		if up {
+			fmt.Println("Error: format of up command must be up <ifname>")
+		} else {
+			fmt.Println("Error: format of down command must be down <ifname>")
+		}
 	} else {
 		ifname := words[1]
 
@@ -189,39 +206,10 @@ func changeInterfaceState(up bool, words []string) {
 	}
 }
 
-
-func readConn(neighbor *Neighbor, iface *NetworkEntry, conn net.Conn) {
+func readConn(iface *NetworkEntry, conn net.Conn) {
 	for {
-		fmt.Println("in readConn")
 		if iface.Up {
-			fmt.Println("iface.Up")
-
-			// // Read the IPv4 header
-			// headerBytes := make([]byte, ipv4header.HeaderLen)
-			// if _, err := readFully(conn, headerBytes); err != nil {
-			//     fmt.Println("Error reading header:", err)
-			//     continue
-			// }
-			// fmt.Printf("Header bytes: %v\n", headerBytes)
-
-			// header, err := ipv4header.ParseHeader(headerBytes)
-			// if err != nil {
-			//     fmt.Println("Error parsing header:", err)
-			//     continue
-			// }
-
-			// // Set payload length based on header (e.g., 2 bytes or variable length)
-			// payloadLen := 2 // Replace with dynamic length if protocol specifies it
-			// dataBytes := make([]byte, payloadLen)
-
-			// if _, err := readFully(conn, dataBytes); err != nil {
-			//     fmt.Println("Error reading data:", err)
-			//     continue
-			// }
-			// fmt.Printf("Data bytes: %v\n", dataBytes)
-			// fmt.Printf("Data as string: %s\n", string(dataBytes))
-
-			buf := make([]byte, 4096)
+			buf := make([]byte, maxPacketSize)
 			_, err := conn.Read(buf)
 
 			if err != nil {
@@ -229,6 +217,15 @@ func readConn(neighbor *Neighbor, iface *NetworkEntry, conn net.Conn) {
 			}
 
 			header, err := ipv4header.ParseHeader(buf[:ipv4header.HeaderLen])
+			// for header.TotalLen > bytesRead { // read until the total message is received
+			// 	newBuf := make([]byte, maxPacketSize)
+			// 	b, err := conn.Read(newBuf)
+			// 	if err != nil {
+			// 		// TODO
+			// 	}
+			// 	buf = append(buf, newBuf...)
+			// 	bytesRead += b
+			// }
 			if err != nil {
 				fmt.Println("Error parsing header:", err)
 				continue
@@ -268,12 +265,11 @@ func createUdpConn(neighbor *Neighbor) {
 	neighbor.UdpConn = conn
 }
 func SendIP(dest netip.Addr, protocolNum uint8, packet []byte) error {
-	fmt.Println("in send IP")
 	header, err := ipv4header.ParseHeader(packet[:ipv4header.HeaderLen])
 	if err != nil {
 		return err
 	}
-	
+
 	if header.TTL == 0 {
 		return errors.New("TTL expired")
 	}
@@ -293,7 +289,7 @@ func SendIP(dest netip.Addr, protocolNum uint8, packet []byte) error {
 	// Iterate through the networkTable to find the longest prefix match
 	for prefix, entry := range networkTable {
 		if prefix.Contains(dest) {
-			if header.Dst == networkTable[prefix].IpAddr{
+			if header.Dst == networkTable[prefix].IpAddr {
 				callback := handlerTable[protocolNum]
 				callback(string(message))
 				return nil
@@ -305,7 +301,6 @@ func SendIP(dest netip.Addr, protocolNum uint8, packet []byte) error {
 	}
 
 	if bestMatch != nil {
-		fmt.Println("in best match")
 		if bestMatch.IsInterface {
 			if bestMatch.Up {
 				if neighbor, exists := bestMatch.LookupTable[dest]; exists {
@@ -327,7 +322,12 @@ func populateTable(fileName string) {
 	if err != nil {
 		panic(err)
 	}
-	
+	if len(lnxConfig.Interfaces) > 1 {
+		isRouter = true
+	} else {
+		isRouter = false
+	}
+
 	for _, iface := range lnxConfig.Interfaces {
 		prefixForm := netip.PrefixFrom(iface.AssignedIP, iface.AssignedPrefix.Bits())
 		entry := &NetworkEntry{

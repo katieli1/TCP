@@ -17,7 +17,7 @@ import (
 	"github.com/google/netstack/tcpip/header"
 )
 
-type NetworkEntry struct { // TODO: talk about this
+type NetworkEntry struct {
 	IpPrefix    netip.Prefix
 	IpAddr      netip.Addr
 	UdpAddrPort netip.AddrPort
@@ -48,7 +48,7 @@ type Neighbor struct {
 type LookupTable map[netip.Addr]*Neighbor
 
 // Combined table for interfaces and static routes
-var networkTable = make(map[netip.Prefix]*NetworkEntry)
+var networkTable = make(map[netip.Prefix][]*NetworkEntry)
 
 type HandlerFunc func(string)
 
@@ -62,29 +62,32 @@ const maxPacketSize = 4096
 func Initialize(fileName string) {
 	populateTable(fileName)
 	// RegisterRecvHandler(200, callback)
-	for _, entry := range networkTable {
-		if !entry.IsDefault {
-			udpAddr, err := net.ResolveUDPAddr("udp4", entry.UdpAddrPort.String())
-			if err != nil {
-				log.Panicln("Error resolving UDP address: ", err)
-			}
-			udpConn, err := net.ListenUDP("udp4", udpAddr)
-			if err != nil {
-				log.Panicln("Error setting up UDP listener: ", err)
-			}
-			for range entry.LookupTable {
-				go readConn(entry, udpConn)
-			}
+	for _, listOfEntries := range networkTable {
+		for i := range listOfEntries {
+			entry := listOfEntries[i]
+			if !entry.IsDefault {
+				udpAddr, err := net.ResolveUDPAddr("udp4", entry.UdpAddrPort.String())
+				if err != nil {
+					log.Panicln("Error resolving UDP address: ", err)
+				}
+				udpConn, err := net.ListenUDP("udp4", udpAddr)
+				if err != nil {
+					log.Panicln("Error setting up UDP listener: ", err)
+				}
+				for range entry.LookupTable {
+					go readConn(entry, udpConn)
+				}
 
-			// if isRouter {
-			// 	for prefix := range networkTable {
-			// 		iface := networkTable[prefix]
-			// 		if !iface.IsDefault {
-			// 			go sendRIPData(iface)
-			// 		}
-			// 	}
-			// }
+				// if isRouter {
+				// 	for prefix := range networkTable {
+				// 		iface := networkTable[prefix]
+				// 		if !iface.IsDefault {
+				// 			go sendRIPData(iface)
+				// 		}
+				// 	}
+				// }
 
+			}
 		}
 
 	}
@@ -138,29 +141,32 @@ func callback(message string, nextHop netip.Addr) {
 	}
 
 	for _, route := range routes {
+
 		prefix := netip.PrefixFrom(route.Address, route.PrefixLength)
 
-		if entry, exists := networkTable[prefix]; exists {
-
-			// for our entry points
-			// if one contains next hop as an address then set it to current entry point
-
-			if neighbor, found := entry.LookupTable[route.Address]; found {
-				// Update cost if the new path is shorter
-				if neighbor.NextHop == nextHop || neighbor.Cost > route.Cost+1 {
-					neighbor.Cost = route.Cost + 1
-					neighbor.NextHop = nextHop
-				}
-			} else {
-				prefix := netip.PrefixFrom(route.Address, route.PrefixLength)
-				entry.LookupTable[route.Address] = &Neighbor{
-					DestAddr: route.Address,
-					Cost:     route.Cost + 1,
-					IpPrefix: prefix,
-					NextHop:  nextHop,
-					WillHop:  true,
+		if _, exists := networkTable[prefix]; exists {
+			for i := range networkTable[prefix] {
+				entry := networkTable[prefix][i]
+				// for our entry points
+				// if one contains next hop as an address then set it to current entry point
+				if neighbor, found := entry.LookupTable[route.Address]; found {
+					// Update cost if the new path is shorter
+					if neighbor.NextHop == nextHop || neighbor.Cost > route.Cost+1 {
+						neighbor.Cost = route.Cost + 1
+						neighbor.NextHop = nextHop
+					}
+				} else {
+					prefix := netip.PrefixFrom(route.Address, route.PrefixLength)
+					entry.LookupTable[route.Address] = &Neighbor{
+						DestAddr: route.Address,
+						Cost:     route.Cost + 1,
+						IpPrefix: prefix,
+						NextHop:  nextHop,
+						WillHop:  true,
+					}
 				}
 			}
+
 		} else {
 			// Add a new entry to the networkTable
 			newEntry := &NetworkEntry{
@@ -177,7 +183,7 @@ func callback(message string, nextHop netip.Addr) {
 				NextHop:  nextHop,
 				WillHop:  true,
 			}
-			networkTable[prefix] = newEntry
+			networkTable[prefix] = append(networkTable[prefix], newEntry)
 		}
 	}
 }
@@ -188,15 +194,19 @@ func sendRIPData() {
 		var messageBuilder strings.Builder
 
 		// Iterate over each NetworkEntry in the network table
-		for _, entry := range networkTable {
-			if entry.IsDefault {
-				//continue
+		for _, listOfEntries := range networkTable {
+			for i := range listOfEntries {
+				entry := listOfEntries[i]
+				if entry.IsDefault {
+					//continue
+				}
+				for _, neighbor := range entry.LookupTable {
+					// Create a RouteInfo message
+					message := fmt.Sprintf("%d,%d,%s;", neighbor.Cost, entry.IpPrefix.Bits(), neighbor.DestAddr.String())
+					messageBuilder.WriteString(message)
+				}
 			}
-			for _, neighbor := range entry.LookupTable {
-				// Create a RouteInfo message
-				message := fmt.Sprintf("%d,%d,%s;", neighbor.Cost, entry.IpPrefix.Bits(), neighbor.DestAddr.String())
-				messageBuilder.WriteString(message)
-			}
+
 		}
 
 		// Remove the trailing ';' character from the message
@@ -212,11 +222,11 @@ func sendRIPData() {
 		// Send the constructed message to each neighbor's UDP connection
 		for _, neighbor := range RipNeighbors {
 			header := &ipv4header.IPv4Header{
-				Version:  4,
-				Len:      20,
-				TTL:      64,
-				Dst:      neighbor.DestAddr,
-				Src:      networkTable[neighbor.IpPrefix].IpAddr,
+				Version: 4,
+				Len:     20,
+				TTL:     64,
+				Dst:     neighbor.DestAddr,
+				//Src:      networkTable[neighbor.IpPrefix].IpAddr,
 				TotalLen: len(message) + ipv4header.HeaderLen,
 				Protocol: 200,
 			}
@@ -260,56 +270,56 @@ func REPL() {
 			break
 		} else if input == "li" { // list interfaces
 			fmt.Println("Name    Addr/Prefix    State")
-			for key := range networkTable {
-				iface := networkTable[key]
-				state := "Up"
-				if !iface.Up {
-					state = "Down"
-				}
-				fmt.Println(iface.Name + "     " + iface.IpPrefix.String() + "    " + state)
-			}
+			// for key := range networkTable {
+			// 	iface := networkTable[key]
+			// 	state := "Up"
+			// 	if !iface.Up {
+			// 		state = "Down"
+			// 	}
+			// 	fmt.Println(iface.Name + "     " + iface.IpPrefix.String() + "    " + state)
+			// }
 		} else if input == "ln" { // list neighbors
 			fmt.Println("Iface    VIP       UDPAddr")
-			for key := range networkTable {
-				iface := networkTable[key]
-				if iface.Up { // don't print neighbors for ifaces that are down
-					for neighborAddr := range iface.LookupTable {
-						// udpConn := iface.LookupTable[neighborAddr].UdpConn.RemoteAddr().String() // TODO: make sure remote addr (not local) is correct
-						// fmt.Println(iface.Name + "      " + neighborAddr.String() + "  " + udpConn)
-						nextHop := iface.LookupTable[neighborAddr].NextHop
-						fmt.Println(iface.Name + "      " + "Address " + neighborAddr.String() + " Prefix " + neighborAddr.String() + " Next hop " + nextHop.String())
-					}
-				}
-			}
+			// for key := range networkTable {
+			// 	iface := networkTable[key]
+			// 	if iface.Up { // don't print neighbors for ifaces that are down
+			// 		for neighborAddr := range iface.LookupTable {
+			// 			// udpConn := iface.LookupTable[neighborAddr].UdpConn.RemoteAddr().String() // TODO: make sure remote addr (not local) is correct
+			// 			// fmt.Println(iface.Name + "      " + neighborAddr.String() + "  " + udpConn)
+			// 			nextHop := iface.LookupTable[neighborAddr].NextHop
+			// 			fmt.Println(iface.Name + "      " + "Address " + neighborAddr.String() + " Prefix " + neighborAddr.String() + " Next hop " + nextHop.String())
+			// 		}
+			// 	}
+			// }
 		} else if input == "lr" { // list routes
 			fmt.Println("T       Prefix        Next hop   Cost")
-			for key := range networkTable {
-				iface := networkTable[key]
-				if iface.Up { // don't print neighbors for ifaces that are down
-					var t string
-					if !iface.IsDefault {
-						t = "L       "
-					} else {
-						if isRouter {
-							t = "R       "
-						} else {
-							t = "S       "
-						}
-					}
-					for neighborAddr := range iface.LookupTable {
-						neighbor := iface.LookupTable[neighborAddr]
+			// for key := range networkTable {
+			// 	iface := networkTable[key]
+			// 	if iface.Up { // don't print neighbors for ifaces that are down
+			// 		var t string
+			// 		if !iface.IsDefault {
+			// 			t = "L       "
+			// 		} else {
+			// 			if isRouter {
+			// 				t = "R       "
+			// 			} else {
+			// 				t = "S       "
+			// 			}
+			// 		}
+			// 		for neighborAddr := range iface.LookupTable {
+			// 			neighbor := iface.LookupTable[neighborAddr]
 
-						fmt.Println(t + iface.IpPrefix.String() + "   " + neighbor.InterfaceName + "        0")
-					}
+			// 			fmt.Println(t + iface.IpPrefix.String() + "   " + neighbor.InterfaceName + "        0")
+			// 		}
 
-				}
-			}
+			// 	}
+			// }
 
 		} else if words[0] == "up" {
-			changeInterfaceState(true, words)
+			//changeInterfaceState(true, words)
 
 		} else if words[0] == "down" {
-			changeInterfaceState(false, words)
+			//changeInterfaceState(false, words)
 
 		} else if words[0] == "send" {
 			if len(words) != 3 {
@@ -321,12 +331,13 @@ func REPL() {
 					continue
 				}
 
+				//TODO: fix
 				var src netip.Addr
-				for key := range networkTable {
-					iface := networkTable[key]
-					src = iface.IpAddr
-					break
-				}
+				// for key := range networkTable {
+				// 	iface := networkTable[key]
+				// 	src = iface.IpAddr
+				// 	break
+				// }
 
 				// need to create header
 				header := &ipv4header.IPv4Header{Version: 4, Len: 20, TTL: 64, Dst: dest, Src: src, TotalLen: len(words[2]) + ipv4header.HeaderLen} // determining source is complicated
@@ -359,23 +370,24 @@ func REPL() {
 	}
 }
 
-func changeInterfaceState(up bool, words []string) {
-	if len(words) != 2 {
-		if up {
-			fmt.Println("Error: format of up command must be up <ifname>")
-		} else {
-			fmt.Println("Error: format of down command must be down <ifname>")
-		}
-	} else {
-		ifname := words[1]
+// func changeInterfaceState(up bool, words []string) {
+// 	if len(words) != 2 {
+// 		if up {
+// 			fmt.Println("Error: format of up command must be up <ifname>")
+// 		} else {
+// 			fmt.Println("Error: format of down command must be down <ifname>")
+// 		}
+// 	} else {
+// 		ifname := words[1]
 
-		for key := range networkTable {
-			if networkTable[key].Name == ifname {
-				networkTable[key].Up = up
-			}
-		}
-	}
-}
+// 		for key := range networkTable {
+
+// 			if networkTable[key].Name == ifname {
+// 				networkTable[key].Up = up
+// 			}
+// 		}
+// 	}
+// }
 
 func readConn(iface *NetworkEntry, conn net.Conn) {
 	for {
@@ -447,17 +459,19 @@ func SendIP(dest netip.Addr, protocolNum uint8, packet []byte) error {
 	}
 
 	message := packet[headerSize:]
-	var bestMatch *NetworkEntry
+	var bestMatch netip.Prefix
 	if protocolNum == 0 {
 		fmt.Println("Message in Send IP: " + string(message))
 	}
 	// Iterate through the networkTable to find the longest prefix match
-	for prefix, entry := range networkTable {
+	for prefix := range networkTable {
 		if protocolNum == 0 {
 			fmt.Println("dest: " + dest.String())
 		}
-		if prefix.Contains(dest) {
-			if header.Dst == networkTable[prefix].IpAddr {
+		//if prefix.Contains(dest) {
+		for i := range networkTable[prefix] {
+			addr := networkTable[prefix][i].IpAddr
+			if addr == header.Dst {
 				if protocolNum == 200 {
 					callback(string(message), header.Src)
 					return nil
@@ -466,34 +480,50 @@ func SendIP(dest netip.Addr, protocolNum uint8, packet []byte) error {
 				callback(string(message))
 				return nil
 			}
-			if bestMatch == nil || prefix.Bits() > bestMatch.IpPrefix.Bits() {
-				bestMatch = entry
-			}
+		}
+
+		//}
+		// if header.Dst == networkTable[prefix].IpAddr {
+		// 	if protocolNum == 200 {
+		// 		callback(string(message), header.Src)
+		// 		return nil
+		// 	}
+		// 	callback := handlerTable[protocolNum]
+		// 	callback(string(message))
+		// 	return nil
+		// }
+		if !bestMatch.IsValid() || (prefix.Bits() > bestMatch.Bits() && prefix.Contains(dest)) { // TODO: BUG HERE
+			bestMatch = prefix
+			fmt.Println("updating best match to " + prefix.String())
 		}
 	}
 
-	if bestMatch != nil {
-		if bestMatch.Up {
-			if bestMatch.IsDefault {
-				SendIP(bestMatch.Default, protocolNum, packet)
-				return nil
-			}
-			if protocolNum == 0 {
-				fmt.Println("bestMatch: " + bestMatch.IpAddr.String())
-			}
-			if neighbor, exists := bestMatch.LookupTable[dest]; exists {
-				if protocolNum == 0 {
-					fmt.Println("neighbor: " + string(message))
-				}
-				if neighbor.WillHop { // ?
-					SendIP(bestMatch.IpAddr, protocolNum, packet)
+	if bestMatch.IsValid() {
+		for i := range networkTable[bestMatch] {
+			e := networkTable[bestMatch][i]
+			if e.Up {
+				if e.IsDefault {
+					SendIP(e.Default, protocolNum, packet)
 					return nil
 				}
-				neighbor.UdpConn.Write(packet)
-				return nil
+				if protocolNum == 0 {
+					fmt.Println("bestMatch: " + e.IpAddr.String())
+				}
+				if neighbor, exists := e.LookupTable[dest]; exists {
+					if protocolNum == 0 {
+						fmt.Println("neighbor: " + string(message))
+					}
+					if neighbor.WillHop { // ?
+						SendIP(e.IpAddr, protocolNum, packet)
+						return nil
+					}
+					neighbor.UdpConn.Write(packet)
+					return nil
+				}
 			}
+			return nil
 		}
-		return nil
+
 	}
 
 	return errors.New("no valid route found")
@@ -522,30 +552,34 @@ func populateTable(fileName string) {
 			Up:          true,
 			IsDefault:   false,
 		}
-		networkTable[prefixForm] = entry
+		networkTable[prefixForm] = append(networkTable[prefixForm], entry)
 	}
 
 	for _, neighbor := range lnxConfig.Neighbors {
-		for _, entry := range networkTable {
-			if entry.Name == neighbor.InterfaceName {
-				n := &Neighbor{
-					DestAddr:      neighbor.DestAddr,
-					UdpAddrPort:   neighbor.UDPAddr,
-					InterfaceName: neighbor.InterfaceName,
-					IpPrefix:      entry.IpPrefix,
-					Cost:          1,
-					WillHop:       false,
-				}
-				entry.LookupTable[neighbor.DestAddr] = n
-				createUdpConn(n)
-				for _, addr := range lnxConfig.RipNeighbors {
-					if addr == neighbor.DestAddr {
-						RipNeighbors = append(RipNeighbors, n)
-						break
+		for _, listOfEntries := range networkTable {
+			for i := range listOfEntries {
+				entry := listOfEntries[i]
+				if entry.Name == neighbor.InterfaceName {
+					n := &Neighbor{
+						DestAddr:      neighbor.DestAddr,
+						UdpAddrPort:   neighbor.UDPAddr,
+						InterfaceName: neighbor.InterfaceName,
+						IpPrefix:      entry.IpPrefix,
+						Cost:          1,
+						WillHop:       false,
 					}
+					entry.LookupTable[neighbor.DestAddr] = n
+					createUdpConn(n)
+					for _, addr := range lnxConfig.RipNeighbors {
+						if addr == neighbor.DestAddr {
+							RipNeighbors = append(RipNeighbors, n)
+							break
+						}
+					}
+					break
 				}
-				break
 			}
+
 		}
 	}
 
@@ -556,7 +590,7 @@ func populateTable(fileName string) {
 			IsDefault: true,
 			Default:   lnxConfig.StaticRoutes[prefix],
 		}
-		networkTable[prefix] = entry
+		networkTable[prefix] = append(networkTable[prefix], entry)
 	}
 }
 

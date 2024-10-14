@@ -144,7 +144,9 @@ func callback(message string, nextHop netip.Addr) {
 		prefix := netip.PrefixFrom(route.Address, route.PrefixLength)
 		// fmt.Println("Processing route for prefix:", prefix.String())
 
-		if entries, exists := networkTable[prefix]; exists {
+		maskedPrefix := newPrefixFromAddr(prefix)
+		fmt.Println("masked prefix returned by helper func: ", maskedPrefix)
+		if entries, exists := networkTable[maskedPrefix]; exists {
 			for i := range entries {
 				if entries[i].Name != "" {
 					continue
@@ -183,7 +185,9 @@ func callback(message string, nextHop netip.Addr) {
 				NextHop:  nextHop,
 				WillHop:  true,
 			}
-			networkTable[prefix] = append(networkTable[prefix], newEntry)
+			maskedPrefix := newPrefixFromAddr(prefix)
+			fmt.Println("masked prefix returned by helper func: ", maskedPrefix)
+			networkTable[maskedPrefix] = append(networkTable[maskedPrefix], newEntry)
 		}
 	}
 }
@@ -495,15 +499,11 @@ func SendIP(dest netip.Addr, protocolNum uint8, packet []byte) error {
 		if protocolNum == 0 {
 			fmt.Println("Possible best match: ", prefix.String())
 		}
+
 		if prefix.Contains(dest) && (bestMatch.Bits() == 0 || prefix.Bits() > bestMatch.Bits()) {
-			bestMatch = prefix
+			bestMatch = newPrefixFromAddr(prefix)
 			if protocolNum == 0 {
 				fmt.Println("Updating best match to:", prefix.String())
-			}
-		}
-		for j := range networkTable[bestMatch] {
-			if networkTable[bestMatch][j].IpAddr == dest {
-				bestMatch = prefix
 			}
 		}
 	}
@@ -545,6 +545,7 @@ func SendIP(dest netip.Addr, protocolNum uint8, packet []byte) error {
 		}
 	} else {
 		fmt.Println("No valid prefix match found for destination:", dest.String())
+		// SendIP(e.Default, protocolNum, packet)
 	}
 
 	return errors.New("no valid route found")
@@ -561,7 +562,7 @@ func populateTable(fileName string) {
 	} else {
 		isRouter = false
 	}
-
+	fmt.Println("HELLOO")
 	for _, iface := range lnxConfig.Interfaces {
 		prefixForm := netip.PrefixFrom(iface.AssignedIP, iface.AssignedPrefix.Bits())
 		entry := &NetworkEntry{
@@ -573,7 +574,9 @@ func populateTable(fileName string) {
 			Up:          true,
 			IsDefault:   false,
 		}
-		networkTable[prefixForm] = append(networkTable[prefixForm], entry)
+		maskedPrefix := newPrefixFromAddr(prefixForm)
+		fmt.Println("masked prefix returned by helper func: ", maskedPrefix)
+		networkTable[maskedPrefix] = append(networkTable[maskedPrefix], entry)
 	}
 
 	for _, neighbor := range lnxConfig.Neighbors {
@@ -611,7 +614,9 @@ func populateTable(fileName string) {
 			IsDefault: true,
 			Default:   lnxConfig.StaticRoutes[prefix],
 		}
-		networkTable[prefix] = append(networkTable[prefix], entry)
+		maskedPrefix := newPrefixFromAddr(prefix)
+		fmt.Println("masked prefix returned by helper func: ", maskedPrefix)
+		networkTable[maskedPrefix] = append(networkTable[maskedPrefix], entry)
 	}
 }
 
@@ -632,4 +637,9 @@ func ComputeChecksum(b []byte) uint16 {
 	checksumInv := checksum ^ 0xffff
 
 	return checksumInv
+}
+
+func newPrefixFromAddr(prefix netip.Prefix) netip.Prefix {
+	networkAddr := prefix.Masked().Addr()
+	return netip.PrefixFrom(networkAddr, prefix.Bits())
 }

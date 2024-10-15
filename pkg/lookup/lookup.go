@@ -59,7 +59,7 @@ var handlerTable = make(map[uint8]HandlerFunc)
 
 var isRouter bool
 
-const maxPacketSize = 4096
+const maxPacketSize = 1400
 
 var timeoutLimit time.Duration
 var ripUpdateRate time.Duration
@@ -80,6 +80,7 @@ func Initialize(fileName string) {
 				}
 				for range entry.LookupTable {
 					go readConn(entry, udpConn)
+					go checkNeighbors(entry)
 				}
 
 				if isRouter {
@@ -421,6 +422,7 @@ func readConn(iface *NetworkEntry, conn net.Conn) {
 
 		if iface.Up {
 			buf := make([]byte, maxPacketSize)
+
 			_, err := conn.Read(buf)
 
 			if err != nil {
@@ -434,28 +436,10 @@ func readConn(iface *NetworkEntry, conn net.Conn) {
 				continue
 			}
 
-			if isRouter {
-
-				for addr := range iface.LookupTable {
-					if iface.LookupTable[addr].IsRouter {
-						startTime := iface.LookupTable[addr].LastHeard
-						fmt.Println("time since I last heard from the router at " + addr.String() + " is " + time.Since(startTime).String())
-						if time.Since(startTime) >= timeoutLimit {
-							fmt.Println("Timeout exceeded")
-							removeNeighbor(addr) // removes IP address from every NetworkEntry's LookupTable
-							break                // exit loop to stop thread
-						}
-
-					}
-				}
-
-			}
-
 			var protocol uint8 = 0
 			if header.Protocol == 200 {
 				protocol = 200
 				// start stopwatch
-				// TODO: check whether for 0 or hjust 200
 				iface.LookupTable[header.Src].LastHeard = time.Now()
 				iface.LookupTable[header.Src].IsRouter = true
 			}
@@ -465,23 +449,46 @@ func readConn(iface *NetworkEntry, conn net.Conn) {
 	}
 }
 
+func checkNeighbors(iface *NetworkEntry) {
+	for {
+		if isRouter {
+			for addr := range iface.LookupTable {
+				if iface.LookupTable[addr].IsRouter {
+					startTime := iface.LookupTable[addr].LastHeard
+					//fmt.Println("time since I last heard from the router at " + addr.String() + " is " + time.Since(startTime).String())
+					if time.Since(startTime) >= timeoutLimit {
+						fmt.Println("Timeout exceeded")
+						removeNeighbor(addr) // removes IP address from every NetworkEntry's LookupTable
+						break                // exit loop to stop thread
+					}
+				}
+			}
+		}
+	}
+}
+
 func removeNeighbor(ip netip.Addr) { // removes IP address from every NetworkEntry's LookupTable
 	fmt.Println("in removeNeighbor")
 	for n := range networkTable {
 		for i := range networkTable[n] {
-			networkTable[n][i].LookupTable[ip].UdpConn.Close()
-			newRipNeighbors := make([]*Neighbor, 0, len(networkTable[n][i].RipNeighbors))
-			for _, neighbor := range networkTable[n][i].RipNeighbors {
-				if neighbor.DestAddr != ip {
-					newRipNeighbors = append(newRipNeighbors, neighbor) // Keep valid neighbors
-				} else {
-					// Optionally handle any cleanup here, e.g., closing connections
-					fmt.Printf("Removing neighbor with IP: %s\n", ip)
-				}
-			}
-			networkTable[n][i].RipNeighbors = newRipNeighbors
+			neighbor, exists := networkTable[n][i].LookupTable[ip]
 
-			delete(networkTable[n][i].LookupTable, ip) // remove this entry from the LookupTable
+			if exists {
+				neighbor.UdpConn.Close()
+				newRipNeighbors := make([]*Neighbor, 0, len(networkTable[n][i].RipNeighbors))
+				for _, nb := range networkTable[n][i].RipNeighbors {
+					if neighbor.DestAddr != ip {
+						newRipNeighbors = append(newRipNeighbors, nb) // Keep valid neighbors
+					} else {
+						// Optionally handle any cleanup here, e.g., closing connections
+						fmt.Printf("Removing neighbor with IP: %s\n", ip)
+					}
+				}
+				networkTable[n][i].RipNeighbors = newRipNeighbors
+
+				delete(networkTable[n][i].LookupTable, ip) // remove this entry from the LookupTable
+			}
+
 		}
 	}
 

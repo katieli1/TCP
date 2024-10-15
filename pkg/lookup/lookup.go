@@ -466,15 +466,20 @@ func readConn(iface *NetworkEntry, conn net.Conn) {
 }
 
 func removeNeighbor(ip netip.Addr) { // removes IP address from every NetworkEntry's LookupTable
+	fmt.Println("in removeNeighbor")
 	for n := range networkTable {
 		for i := range networkTable[n] {
 			networkTable[n][i].LookupTable[ip].UdpConn.Close()
-			for r := range networkTable[n][i].RipNeighbors {
-				neighbor := networkTable[n][i].RipNeighbors[r]
-				if neighbor.DestAddr == ip {
-					networkTable[n][i].RipNeighbors = append(networkTable[n][i].RipNeighbors[:r], networkTable[n][i].RipNeighbors[r+1:]...)
+			newRipNeighbors := make([]*Neighbor, 0, len(networkTable[n][i].RipNeighbors))
+			for _, neighbor := range networkTable[n][i].RipNeighbors {
+				if neighbor.DestAddr != ip {
+					newRipNeighbors = append(newRipNeighbors, neighbor) // Keep valid neighbors
+				} else {
+					// Optionally handle any cleanup here, e.g., closing connections
+					fmt.Printf("Removing neighbor with IP: %s\n", ip)
 				}
 			}
+			networkTable[n][i].RipNeighbors = newRipNeighbors
 
 			delete(networkTable[n][i].LookupTable, ip) // remove this entry from the LookupTable
 		}

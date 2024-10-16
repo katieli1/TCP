@@ -164,11 +164,15 @@ func callback(message string, nextHop netip.Addr) {
 				}
 				entry := entries[i]
 				if neighbor, found := entry.LookupTable[route.Address]; found {
-					if neighbor.NextHop == nextHop || neighbor.Cost > route.Cost+1 {
-						// fmt.Println("Updating cost for neighbor:", route.Address.String())
-						neighbor.Cost = route.Cost + 1
-						neighbor.NextHop = nextHop
-					}
+					//poison reverse - split horizon
+					newCost = route.Cost + 1
+                    if newCost >= maxCost {
+                        // Mark route as unreachable by setting maxCost
+                        neighbor.Cost = maxCost
+                    } else if neighbor.NextHop == nextHop || neighbor.Cost > newCost {
+                        neighbor.Cost = newCost
+                        neighbor.NextHop = nextHop
+                    }
 				} else {
 					fmt.Println("Adding new neighbor:", route.Address.String())
 
@@ -183,7 +187,6 @@ func callback(message string, nextHop netip.Addr) {
 				entry.LookupTable[route.Address].LastHeard = time.Now()
 			}
 		} else {
-			// fmt.Println("Adding new entry to networkTable for prefix:", prefix.String())
 			newEntry := &NetworkEntry{
 				IpPrefix:    newPrefixFromAddr(prefix),
 				IpAddr:      nextHop,
@@ -221,8 +224,17 @@ func sendRIPData(entry *NetworkEntry) {
 					continue
 				}
 				for _, neighbor := range entry.LookupTable {
-					message := fmt.Sprintf("%d,%d,%s;", neighbor.Cost, entry.IpPrefix.Bits(), neighbor.DestAddr.String())
-					messageBuilder.WriteString(message)
+					var cost int
+                    //split horizon
+                    if neighbor.NextHop == entry.IpAddr {
+                        // Poison reverse
+                        cost = infinity
+                    } else {
+                        cost = neighbor.Cost
+                    }
+
+                    message := fmt.Sprintf("%d,%d,%s;", cost, entry.IpPrefix.Bits(), neighbor.DestAddr.String())
+                    messageBuilder.WriteString(message)
 					// fmt.Println("Appending to message:", message)
 				}
 			}
@@ -646,6 +658,11 @@ func SendIP(dest netip.Addr, protocolNum uint8, packet []byte) error {
 					fmt.Println("Best match address:", e.IpAddr.String())
 				}
 				if neighbor, exists := e.LookupTable[dest]; exists {
+					//count to infinity
+                    if neighbor.Cost >= maxCost{
+                        continue // drop the package
+                    }
+
 					if protocolNum == 0 {
 						fmt.Println("Neighbor found, message:", string(message))
 					}

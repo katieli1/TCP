@@ -4,11 +4,9 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
-	"github.com/google/netstack/tcpip/header"
 	ipv4header "ip/pkg/header-parser"
 	"ip/pkg/lnxconfig"
 	"log"
-	"math"
 	"net"
 	"net/netip"
 	"os"
@@ -16,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/google/netstack/tcpip/header"
 )
 
 var networkTableLock sync.RWMutex
@@ -157,7 +157,6 @@ func callback(message string, nextHop netip.Addr) {
 		// fmt.Println("Processing route for prefix:", prefix.String())
 
 		maskedPrefix := newPrefixFromAddr(prefix)
-		fmt.Println("masked prefix returned by helper func: ", maskedPrefix)
 		if entry, exists := networkTable[maskedPrefix]; exists {
 			if entry.Name != "" {
 				continue
@@ -204,7 +203,6 @@ func callback(message string, nextHop netip.Addr) {
 				LastHeard: time.Now(),
 			}
 			maskedPrefix := newPrefixFromAddr(prefix)
-			fmt.Println("masked prefix returned by helper func: ", maskedPrefix)
 			networkTable[maskedPrefix] = newEntry
 		}
 
@@ -225,12 +223,12 @@ func sendRIPData(entry *NetworkEntry) {
 			for _, neighbor := range entry.LookupTable {
 				var cost int
 				//split horizon
-				if neighbor.NextHop == entry.IpAddr {
-					// Poison reverse
-					cost = math.MaxInt
-				} else {
-					cost = neighbor.Cost
-				}
+				// if neighbor.NextHop == entry.IpAddr {
+				// 	// Poison reverse
+				// 	cost = math.MaxInt
+				// } else {
+				cost = neighbor.Cost
+				// }
 
 				message := fmt.Sprintf("%d,%d,%s;", cost, entry.IpPrefix.Bits(), neighbor.DestAddr.String())
 				messageBuilder.WriteString(message)
@@ -493,7 +491,6 @@ func readConn(iface *NetworkEntry, conn net.Conn) {
 
 			}
 			SendIP(header.Dst, protocol, buf)
-			fmt.Println("left sendIP")
 		}
 	}
 }
@@ -717,7 +714,6 @@ func populateTable(fileName string) {
 			IsDefault:   false,
 		}
 		maskedPrefix := newPrefixFromAddr(prefixForm)
-		fmt.Println("masked prefix returned by helper func: ", maskedPrefix)
 		networkTable[maskedPrefix] = entry
 	}
 
@@ -756,7 +752,6 @@ func populateTable(fileName string) {
 			Default:   lnxConfig.StaticRoutes[prefix],
 		}
 		maskedPrefix := newPrefixFromAddr(prefix)
-		fmt.Println("masked prefix returned by helper func: ", maskedPrefix)
 		networkTable[maskedPrefix] = entry
 	}
 }

@@ -13,7 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
+	"math"
 	"github.com/google/netstack/tcpip/header"
 	"sync"
 )
@@ -66,6 +66,8 @@ const maxPacketSize = 1400
 
 var timeoutLimit time.Duration
 var ripUpdateRate time.Duration
+
+var maxCost = 16
 
 func Initialize(fileName string) {
 	populateTable(fileName)
@@ -165,7 +167,7 @@ func callback(message string, nextHop netip.Addr) {
 				entry := entries[i]
 				if neighbor, found := entry.LookupTable[route.Address]; found {
 					//poison reverse - split horizon
-					newCost = route.Cost + 1
+					newCost := route.Cost + 1
                     if newCost >= maxCost {
                         // Mark route as unreachable by setting maxCost
                         neighbor.Cost = maxCost
@@ -228,7 +230,7 @@ func sendRIPData(entry *NetworkEntry) {
                     //split horizon
                     if neighbor.NextHop == entry.IpAddr {
                         // Poison reverse
-                        cost = infinity
+                        cost = math.MaxInt
                     } else {
                         cost = neighbor.Cost
                     }

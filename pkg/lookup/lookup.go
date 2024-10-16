@@ -15,7 +15,10 @@ import (
 	"time"
 
 	"github.com/google/netstack/tcpip/header"
+	"sync"
 )
+
+var networkTableLock sync.RWMutex
 
 type NetworkEntry struct {
 	IpPrefix     netip.Prefix
@@ -66,6 +69,7 @@ var ripUpdateRate time.Duration
 
 func Initialize(fileName string) {
 	populateTable(fileName)
+	networkTableLock.RLock()
 	for _, listOfEntries := range networkTable {
 		for i := range listOfEntries {
 			entry := listOfEntries[i]
@@ -80,7 +84,7 @@ func Initialize(fileName string) {
 				}
 				for range entry.LookupTable {
 					go readConn(entry, udpConn)
-					go checkNeighbors(entry)
+
 				}
 
 				if isRouter {
@@ -95,6 +99,8 @@ func Initialize(fileName string) {
 		}
 
 	}
+	networkTableLock.RUnlock()
+	go checkNeighbors()
 
 	// if isRouter {
 	// 	go sendRIPData()
@@ -164,7 +170,7 @@ func callback(message string, nextHop netip.Addr) {
 						neighbor.NextHop = nextHop
 					}
 				} else {
-					// fmt.Println("Adding new neighbor:", route.Address.String())
+					fmt.Println("Adding new neighbor:", route.Address.String())
 
 					entry.LookupTable[route.Address] = &Neighbor{
 						DestAddr: route.Address,
@@ -207,6 +213,7 @@ func sendRIPData(entry *NetworkEntry) {
 		time.Sleep(ripUpdateRate)
 		var messageBuilder strings.Builder
 
+		networkTableLock.RLock()
 		for _, listOfEntries := range networkTable {
 			for i := range listOfEntries {
 				entry := listOfEntries[i]
@@ -220,6 +227,7 @@ func sendRIPData(entry *NetworkEntry) {
 				}
 			}
 		}
+		networkTableLock.RUnlock()
 
 		message := strings.TrimSuffix(messageBuilder.String(), ";")
 		if message == "" {
@@ -299,8 +307,10 @@ func REPL() {
 					iface := listOfEntries[i]
 					if iface.Up { // don't print neighbors for ifaces that are down
 						for neighborAddr := range iface.LookupTable {
-							udpConn := iface.LookupTable[neighborAddr].UdpConn.RemoteAddr().String() // TODO: make sure remote addr (not local) is correct
-							fmt.Println(iface.Name + "      " + neighborAddr.String() + "  " + udpConn)
+							if iface.LookupTable[neighborAddr].NextHop == iface.LookupTable[neighborAddr].DestAddr {
+								// udpConn := iface.LookupTable[neighborAddr].UdpConn.RemoteAddr().String() // TODO: make sure remote addr (not local) is correct
+								// fmt.Println(iface.Name + "      " + neighborAddr.String() + "  " + udpConn)
+							}
 
 							// ONLY FOR DEBUGGING; DELETE FOR FINAL VERSION
 							// nextHop := iface.LookupTable[neighborAddr].NextHop
@@ -415,9 +425,7 @@ func changeInterfaceState(up bool, words []string) {
 }
 
 func readConn(iface *NetworkEntry, conn net.Conn) {
-	for key := range iface.LookupTable { // initialize times
-		iface.LookupTable[key].LastHeard = time.Now()
-	}
+
 	for {
 
 		if iface.Up {
@@ -440,8 +448,31 @@ func readConn(iface *NetworkEntry, conn net.Conn) {
 			if header.Protocol == 200 {
 				protocol = 200
 				// start stopwatch
-				iface.LookupTable[header.Src].LastHeard = time.Now()
-				iface.LookupTable[header.Src].IsRouter = true
+				// message := buf[header.Len:]
+				// entries := strings.Split(string(message), ";")
+				// for _, entry := range entries {
+				// 	fields := strings.Split(entry, ",")
+				// 	if len(fields) != 3 {
+				// 		fmt.Println("Skipping malformed entry:", entry)
+
+				// 	}
+				// 	addr, err := netip.ParseAddr(strings.TrimSpace(strings.ReplaceAll(fields[2], "\x00", "")))
+				// 	if err != nil {
+				// 		fmt.Println("Invalid address:", fields[2], "Error:", err)
+				// 		continue
+				// 	}
+
+				// 	fmt.Println("received information about address " + addr.String())
+
+				// 	n, exists := iface.LookupTable[addr]
+				// 	fmt.Println("does the address exist? ", exists)
+				// 	if exists {
+				// 		fmt.Println("Updating LastHeard for " + addr.String())
+				// 		n.LastHeard = time.Now()
+				// 	}
+
+				// }
+
 			}
 			SendIP(header.Dst, protocol, buf)
 			fmt.Println("left sendIP")
@@ -449,44 +480,71 @@ func readConn(iface *NetworkEntry, conn net.Conn) {
 	}
 }
 
-func checkNeighbors(iface *NetworkEntry) {
+func checkNeighbors() {
+	// for key := range iface.LookupTable { // initialize times
+	// 	iface.LookupTable[key].LastHeard = time.Now()
+	// }
 	for {
-		if isRouter {
-			for addr := range iface.LookupTable {
-				if iface.LookupTable[addr].IsRouter {
-					startTime := iface.LookupTable[addr].LastHeard
-					//fmt.Println("time since I last heard from the router at " + addr.String() + " is " + time.Since(startTime).String())
-					if time.Since(startTime) >= timeoutLimit {
-						fmt.Println("Timeout exceeded")
-						removeNeighbor(addr) // removes IP address from every NetworkEntry's LookupTable
-						break                // exit loop to stop thread
+		//fmt.Println("in check neighbors loop")
+		//time.Sleep(2 * time.Second)
+		networkTableLock.Lock()
+
+		for i := range networkTable {
+			for n := range networkTable[i] {
+				//for n := range l {
+				iface := networkTable[i][n]
+
+				if isRouter {
+					for addr := range iface.LookupTable {
+
+						lastHeard := iface.LookupTable[addr].LastHeard
+						if !lastHeard.IsZero() {
+							elapsed := time.Since(lastHeard)
+							if elapsed >= time.Second && elapsed%time.Second == 0 {
+								fmt.Println("time since I last heard from the router at " + addr.String() + " is " + elapsed.String())
+							}
+							if time.Since(lastHeard) >= timeoutLimit {
+								fmt.Println("Timeout exceeded")
+								//networkTableLock.RUnlock()
+								removeNeighbor(addr) // removes IP address from every NetworkEntry's LookupTable
+								break                // exit loop to stop thread
+							}
+						}
+
 					}
+
 				}
 			}
 		}
+		//networkTableLock.RUnlock()
+		networkTableLock.Unlock()
+
 	}
 }
 
 func removeNeighbor(ip netip.Addr) { // removes IP address from every NetworkEntry's LookupTable
+
 	fmt.Println("in removeNeighbor")
 	for n := range networkTable {
 		for i := range networkTable[n] {
 			neighbor, exists := networkTable[n][i].LookupTable[ip]
 
 			if exists {
-				neighbor.UdpConn.Close()
+				if neighbor.UdpConn != nil {
+					neighbor.UdpConn.Close()
+				}
+
 				newRipNeighbors := make([]*Neighbor, 0, len(networkTable[n][i].RipNeighbors))
 				for _, nb := range networkTable[n][i].RipNeighbors {
 					if neighbor.DestAddr != ip {
 						newRipNeighbors = append(newRipNeighbors, nb) // Keep valid neighbors
 					} else {
-						// Optionally handle any cleanup here, e.g., closing connections
 						fmt.Printf("Removing neighbor with IP: %s\n", ip)
 					}
 				}
 				networkTable[n][i].RipNeighbors = newRipNeighbors
-
 				delete(networkTable[n][i].LookupTable, ip) // remove this entry from the LookupTable
+
 			}
 
 		}
@@ -509,6 +567,7 @@ func createUdpConn(neighbor *Neighbor) {
 	}
 	neighbor.UdpConn = conn
 }
+
 func SendIP(dest netip.Addr, protocolNum uint8, packet []byte) error {
 	if protocolNum == 0 {
 		fmt.Println("Start of SendIP function, Destination:", dest.String())
@@ -539,6 +598,7 @@ func SendIP(dest netip.Addr, protocolNum uint8, packet []byte) error {
 	}
 
 	var bestMatch netip.Prefix
+	networkTableLock.RLock()
 	for prefix := range networkTable {
 
 		for i := range networkTable[prefix] {
@@ -547,11 +607,13 @@ func SendIP(dest netip.Addr, protocolNum uint8, packet []byte) error {
 				if protocolNum == 200 {
 					// fmt.Println("Invoking callback with message:", string(message))
 					callback(string(message), header.Src)
+					networkTableLock.RUnlock()
 					return nil
 				}
 				if callback, found := handlerTable[protocolNum]; found {
 					fmt.Println("Invoking handler callback for protocol:", protocolNum)
 					callback(string(message))
+					networkTableLock.RUnlock()
 					return nil
 				}
 			}
@@ -567,6 +629,7 @@ func SendIP(dest netip.Addr, protocolNum uint8, packet []byte) error {
 			}
 		}
 	}
+	networkTableLock.RUnlock()
 
 	if bestMatch.IsValid() {
 		if protocolNum == 0 {

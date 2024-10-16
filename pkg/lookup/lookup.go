@@ -23,7 +23,7 @@ var networkTableLock sync.RWMutex
 type NetworkEntry struct {
 	IpPrefix     netip.Prefix
 	IpAddr       netip.Addr
-	UdpAddrPort  netip.AddrPort
+	UdpAddrPort  *netip.AddrPort
 	LookupTable  LookupTable // Lookup table for neighbors
 	Name         string
 	Up           bool
@@ -301,11 +301,14 @@ func REPL() {
 		} else if input == "li" { // list interfaces
 			fmt.Println("Name    Addr/Prefix    State")
 			for _, iface := range networkTable {
-				state := "Up"
-				if !iface.Up {
-					state = "Down"
+				if iface.UdpAddrPort != nil {
+					state := "Up"
+					if !iface.Up {
+						state = "Down"
+					}
+					fmt.Println(iface.Name + "     " + iface.IpPrefix.String() + "    " + state)
+
 				}
-				fmt.Println(iface.Name + "     " + iface.IpPrefix.String() + "    " + state)
 
 			}
 
@@ -315,9 +318,9 @@ func REPL() {
 				iface := networkTable[key]
 				if iface.Up { // don't print neighbors for ifaces that are down
 					for neighborAddr := range iface.LookupTable {
-						if iface.LookupTable[neighborAddr].NextHop == iface.LookupTable[neighborAddr].DestAddr {
-							// udpConn := iface.LookupTable[neighborAddr].UdpConn.RemoteAddr().String() // TODO: make sure remote addr (not local) is correct
-							// fmt.Println(iface.Name + "      " + neighborAddr.String() + "  " + udpConn)
+						if iface.LookupTable[neighborAddr].UdpConn != nil {
+							udpConn := iface.LookupTable[neighborAddr].UdpConn.RemoteAddr().String() // TODO: make sure remote addr (not local) is correct
+							fmt.Println(iface.Name + "      " + neighborAddr.String() + "  " + udpConn)
 						}
 
 						// ONLY FOR DEBUGGING; DELETE FOR FINAL VERSION
@@ -342,10 +345,22 @@ func REPL() {
 							t = "S       "
 						}
 					}
+
+					var seenPrefixes []string
 					for neighborAddr := range iface.LookupTable {
 						neighbor := iface.LookupTable[neighborAddr]
 
-						fmt.Println(t + iface.IpPrefix.String() + "   " + neighbor.InterfaceName + "        0")
+						seen := false
+						for _, prefix := range seenPrefixes {
+							if prefix == iface.IpPrefix.String() {
+								seen = true
+							}
+						}
+						if seen {
+							continue
+						}
+						seenPrefixes = append(seenPrefixes, iface.IpPrefix.String())
+						fmt.Println(t+iface.IpPrefix.String()+"   "+neighbor.NextHop.String()+"     ", neighbor.Cost-1)
 					}
 
 				}
@@ -502,7 +517,7 @@ func checkNeighbors() {
 					lastHeard := iface.LookupTable[addr].LastHeard
 					if !lastHeard.IsZero() {
 
-						fmt.Println("time since I last heard from the router at " + addr.String() + " is " + time.Since(lastHeard).String())
+						// fmt.Println("time since I last heard from the router at " + addr.String() + " is " + time.Since(lastHeard).String())
 
 						if time.Since(lastHeard) >= timeoutLimit {
 							fmt.Println("Timeout exceeded")
@@ -696,7 +711,7 @@ func populateTable(fileName string) {
 			Name:        iface.Name,
 			IpPrefix:    prefixForm,
 			IpAddr:      prefixForm.Addr(),
-			UdpAddrPort: iface.UDPAddr,
+			UdpAddrPort: &iface.UDPAddr,
 			LookupTable: make(LookupTable),
 			Up:          true,
 			IsDefault:   false,
@@ -715,6 +730,7 @@ func populateTable(fileName string) {
 					UdpAddrPort:   neighbor.UDPAddr,
 					InterfaceName: neighbor.InterfaceName,
 					IpPrefix:      maskedPrefix,
+					NextHop:       neighbor.DestAddr,
 					Cost:          1,
 					WillHop:       false,
 				}

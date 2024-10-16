@@ -166,13 +166,13 @@ func callback(message string, nextHop netip.Addr) {
 				if neighbor, found := entry.LookupTable[route.Address]; found {
 					//poison reverse - split horizon
 					newCost = route.Cost + 1
-                    if newCost >= maxCost {
-                        // Mark route as unreachable by setting maxCost
-                        neighbor.Cost = maxCost
-                    } else if neighbor.NextHop == nextHop || neighbor.Cost > newCost {
-                        neighbor.Cost = newCost
-                        neighbor.NextHop = nextHop
-                    }
+					if newCost >= maxCost {
+						// Mark route as unreachable by setting maxCost
+						neighbor.Cost = maxCost
+					} else if neighbor.NextHop == nextHop || neighbor.Cost > newCost {
+						neighbor.Cost = newCost
+						neighbor.NextHop = nextHop
+					}
 				} else {
 					fmt.Println("Adding new neighbor:", route.Address.String())
 
@@ -225,16 +225,16 @@ func sendRIPData(entry *NetworkEntry) {
 				}
 				for _, neighbor := range entry.LookupTable {
 					var cost int
-                    //split horizon
-                    if neighbor.NextHop == entry.IpAddr {
-                        // Poison reverse
-                        cost = infinity
-                    } else {
-                        cost = neighbor.Cost
-                    }
+					//split horizon
+					if neighbor.NextHop == entry.IpAddr {
+						// Poison reverse
+						cost = infinity
+					} else {
+						cost = neighbor.Cost
+					}
 
-                    message := fmt.Sprintf("%d,%d,%s;", cost, entry.IpPrefix.Bits(), neighbor.DestAddr.String())
-                    messageBuilder.WriteString(message)
+					message := fmt.Sprintf("%d,%d,%s;", cost, entry.IpPrefix.Bits(), neighbor.DestAddr.String())
+					messageBuilder.WriteString(message)
 					// fmt.Println("Appending to message:", message)
 				}
 			}
@@ -659,9 +659,9 @@ func SendIP(dest netip.Addr, protocolNum uint8, packet []byte) error {
 				}
 				if neighbor, exists := e.LookupTable[dest]; exists {
 					//count to infinity
-                    if neighbor.Cost >= maxCost{
-                        continue // drop the package
-                    }
+					if neighbor.Cost >= maxCost {
+						continue // drop the package
+					}
 
 					if protocolNum == 0 {
 						fmt.Println("Neighbor found, message:", string(message))

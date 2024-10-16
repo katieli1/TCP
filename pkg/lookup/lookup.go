@@ -499,13 +499,11 @@ func checkNeighbors() {
 
 						lastHeard := iface.LookupTable[addr].LastHeard
 						if !lastHeard.IsZero() {
-							elapsed := time.Since(lastHeard)
-							if elapsed >= time.Second && elapsed%time.Second == 0 {
-								fmt.Println("time since I last heard from the router at " + addr.String() + " is " + elapsed.String())
-							}
+
+							fmt.Println("time since I last heard from the router at " + addr.String() + " is " + time.Since(lastHeard).String())
+
 							if time.Since(lastHeard) >= timeoutLimit {
 								fmt.Println("Timeout exceeded")
-								//networkTableLock.RUnlock()
 								removeNeighbor(addr) // removes IP address from every NetworkEntry's LookupTable
 								break                // exit loop to stop thread
 							}
@@ -516,7 +514,6 @@ func checkNeighbors() {
 				}
 			}
 		}
-		//networkTableLock.RUnlock()
 		networkTableLock.Unlock()
 
 	}

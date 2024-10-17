@@ -10,7 +10,7 @@ import (
 	"net"
 	"net/netip"
 	"os"
-	"strconv"
+	//"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -56,7 +56,7 @@ type LookupTable map[netip.Addr]*Neighbor
 // Combined table for interfaces and static routes
 var networkTable = make(map[netip.Prefix]*NetworkEntry)
 
-type HandlerFunc func(string)
+type HandlerFunc func(message string, nextHop netip.Addr, networkTable map[netip.Prefix]*NetworkEntry, maxCost int)
 
 var handlerTable = make(map[uint8]HandlerFunc)
 
@@ -85,7 +85,6 @@ func Initialize(fileName string) {
 			}
 			for range entry.LookupTable {
 				go readConn(entry, udpConn)
-
 			}
 
 			if isRouter {
@@ -103,9 +102,6 @@ func Initialize(fileName string) {
 	networkTableLock.RUnlock()
 	go checkNeighbors()
 
-	// if isRouter {
-	// 	go sendRIPData()
-	// }
 	done := make(chan struct{})
 	go func() {
 		REPL()
@@ -113,99 +109,6 @@ func Initialize(fileName string) {
 	}()
 
 	<-done
-}
-
-func callback(message string, nextHop netip.Addr) {
-	// fmt.Println("In Callback, message:", message)
-	var routes []RouteInfo
-	entries := strings.Split(message, ";")
-	for _, entry := range entries {
-		fields := strings.Split(entry, ",")
-		if len(fields) != 3 {
-			fmt.Println("Skipping malformed entry:", entry)
-			continue
-		}
-
-		cost, err := strconv.Atoi(fields[0])
-		if err != nil {
-			fmt.Println("Invalid cost:", fields[0])
-			continue
-		}
-
-		prefixLength, err := strconv.Atoi(fields[1])
-		if err != nil {
-			fmt.Println("Invalid prefix length:", fields[1])
-			continue
-		}
-
-		addr, err := netip.ParseAddr(strings.TrimSpace(strings.ReplaceAll(fields[2], "\x00", "")))
-		if err != nil {
-			fmt.Println("Invalid address:", fields[2], "Error:", err)
-			continue
-		}
-		//if it is one of my interfaces, don't add it
-		routes = append(routes, RouteInfo{
-			Cost:         cost,
-			PrefixLength: prefixLength,
-			Address:      addr,
-		})
-		// fmt.Println("Parsed route: address =", addr.String(), ", cost =", cost, ", prefix length =", prefixLength)
-	}
-
-	for _, route := range routes {
-		prefix := netip.PrefixFrom(route.Address, route.PrefixLength)
-		// fmt.Println("Processing route for prefix:", prefix.String())
-
-		maskedPrefix := newPrefixFromAddr(prefix)
-		if entry, exists := networkTable[maskedPrefix]; exists {
-			if entry.Name != "" {
-				continue
-			}
-			if neighbor, found := entry.LookupTable[route.Address]; found {
-				//poison reverse - split horizon
-				newCost := route.Cost + 1
-				if newCost >= maxCost {
-					// Mark route as unreachable by setting maxCost
-					neighbor.Cost = maxCost
-				} else if neighbor.NextHop == nextHop || neighbor.Cost > newCost {
-					neighbor.Cost = newCost
-					neighbor.NextHop = nextHop
-					entry.LookupTable[route.Address].LastHeard = time.Now()
-				}
-			} else {
-				fmt.Println("Adding new neighbor:", route.Address.String())
-
-				entry.LookupTable[route.Address] = &Neighbor{
-					DestAddr: route.Address,
-					Cost:     route.Cost + 1,
-					IpPrefix: newPrefixFromAddr(prefix),
-					NextHop:  nextHop,
-					WillHop:  true,
-				}
-			}
-
-		} else {
-			newEntry := &NetworkEntry{
-				IpPrefix:    newPrefixFromAddr(prefix),
-				IpAddr:      nextHop,
-				LookupTable: make(map[netip.Addr]*Neighbor),
-				Up:          true,
-				IsDefault:   false,
-			}
-			newEntry.LookupTable[route.Address] = &Neighbor{
-				DestAddr:  route.Address,
-				Cost:      route.Cost + 1,
-				IpPrefix:  newPrefixFromAddr(prefix),
-				NextHop:   nextHop,
-				WillHop:   true,
-				LastHeard: time.Now(),
-			}
-			maskedPrefix := newPrefixFromAddr(prefix)
-			networkTable[maskedPrefix] = newEntry
-		}
-
-	}
-
 }
 
 func sendRIPData(entry *NetworkEntry) {
@@ -475,32 +378,6 @@ func readConn(iface *NetworkEntry, conn net.Conn) {
 			var protocol uint8 = 0
 			if header.Protocol == 200 {
 				protocol = 200
-				// start stopwatch
-				// message := buf[header.Len:]
-				// entries := strings.Split(string(message), ";")
-				// for _, entry := range entries {
-				// 	fields := strings.Split(entry, ",")
-				// 	if len(fields) != 3 {
-				// 		fmt.Println("Skipping malformed entry:", entry)
-
-				// 	}
-				// 	addr, err := netip.ParseAddr(strings.TrimSpace(strings.ReplaceAll(fields[2], "\x00", "")))
-				// 	if err != nil {
-				// 		fmt.Println("Invalid address:", fields[2], "Error:", err)
-				// 		continue
-				// 	}
-
-				// 	fmt.Println("received information about address " + addr.String())
-
-				// 	n, exists := iface.LookupTable[addr]
-				// 	fmt.Println("does the address exist? ", exists)
-				// 	if exists {
-				// 		fmt.Println("Updating LastHeard for " + addr.String())
-				// 		n.LastHeard = time.Now()
-				// 	}
-
-				// }
-
 			}
 			SendIP(header.Dst, protocol, buf)
 		}
@@ -620,15 +497,10 @@ func SendIP(dest netip.Addr, protocolNum uint8, packet []byte) error {
 	for prefix := range networkTable {
 		addr := networkTable[prefix].IpAddr
 		if addr == header.Dst && networkTable[prefix].Name != "" {
-			if protocolNum == 200 {
-				// fmt.Println("Invoking callback with message:", string(message))
-				callback(string(message), header.Src)
-				networkTableLock.RUnlock()
-				return nil
-			}
+
 			if callback, found := handlerTable[protocolNum]; found {
 				fmt.Println("Invoking handler callback for protocol:", protocolNum)
-				callback(string(message))
+				callback(string(message), header.Src, networkTable, maxCost)
 				networkTableLock.RUnlock()
 				return nil
 			}
@@ -639,7 +511,7 @@ func SendIP(dest netip.Addr, protocolNum uint8, packet []byte) error {
 		}
 
 		if prefix.Contains(dest) && (bestMatch.Bits() == 0 || prefix.Bits() > bestMatch.Bits()) {
-			bestMatch = newPrefixFromAddr(prefix)
+			bestMatch = getMaskedPrefix(prefix)
 			if protocolNum == 0 {
 				fmt.Println("Updating best match to:", prefix.String())
 			}
@@ -722,14 +594,14 @@ func populateTable(fileName string) {
 			Up:          true,
 			IsDefault:   false,
 		}
-		maskedPrefix := newPrefixFromAddr(prefixForm)
+		maskedPrefix := getMaskedPrefix(prefixForm)
 		networkTable[maskedPrefix] = entry
 	}
 
 	for _, neighbor := range lnxConfig.Neighbors {
 		for _, entry := range networkTable {
 			if entry.Name == neighbor.InterfaceName {
-				maskedPrefix := newPrefixFromAddr(entry.IpPrefix)
+				maskedPrefix := getMaskedPrefix(entry.IpPrefix)
 				n := &Neighbor{
 					DestAddr:      neighbor.DestAddr,
 					UdpAddrPort:   neighbor.UDPAddr,
@@ -760,7 +632,7 @@ func populateTable(fileName string) {
 			IsDefault: true,
 			Default:   lnxConfig.StaticRoutes[prefix],
 		}
-		maskedPrefix := newPrefixFromAddr(prefix)
+		maskedPrefix := getMaskedPrefix(prefix)
 		networkTable[maskedPrefix] = entry
 	}
 }
@@ -784,7 +656,7 @@ func ComputeChecksum(b []byte) uint16 {
 	return checksumInv
 }
 
-func newPrefixFromAddr(prefix netip.Prefix) netip.Prefix {
+func getMaskedPrefix(prefix netip.Prefix) netip.Prefix {
 	networkAddr := prefix.Masked().Addr()
 	return netip.PrefixFrom(networkAddr, prefix.Bits())
 }

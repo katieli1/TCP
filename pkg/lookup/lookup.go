@@ -550,12 +550,13 @@ func removeNeighbor(ip netip.Addr) { // removes IP address from every NetworkEnt
 				// 	}
 				// }
 				//networkTable[i].RipNeighbors = newRipNeighbors
-				// delete(networkTable[i].LookupTable, n) // remove this entry from the LookupTabl
+				delete(networkTable[i].LookupTable, n) // remove this entry from the LookupTabl
 
 				// fmt.Println("removing ", n, " from LookupTable entry ", networkTable[i])
-				delete(networkTable, i)
+				//delete(networkTable, i)
 			}
 		}
+
 		neighbor, exists := networkTable[i].LookupTable[ip]
 
 		if exists {

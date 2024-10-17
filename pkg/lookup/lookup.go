@@ -170,6 +170,7 @@ func callback(message string, nextHop netip.Addr) {
 				} else if neighbor.NextHop == nextHop || neighbor.Cost > newCost {
 					neighbor.Cost = newCost
 					neighbor.NextHop = nextHop
+					entry.LookupTable[route.Address].LastHeard = time.Now()
 				}
 			} else {
 				fmt.Println("Adding new neighbor:", route.Address.String())
@@ -182,9 +183,6 @@ func callback(message string, nextHop netip.Addr) {
 					WillHop:  true,
 				}
 			}
-
-			// update last heard time in either case
-			entry.LookupTable[route.Address].LastHeard = time.Now()
 
 		} else {
 			newEntry := &NetworkEntry{
@@ -234,6 +232,9 @@ func sendRIPData(entry *NetworkEntry) {
 				messageBuilder.WriteString(message)
 				// fmt.Println("Appending to message:", message)
 			}
+
+			me := fmt.Sprintf("%d,%d,%s;", 0, entry.IpPrefix.Bits(), entry.IpAddr.String())
+			messageBuilder.WriteString(me)
 
 		}
 		networkTableLock.RUnlock()
@@ -510,21 +511,17 @@ func checkNeighbors() {
 
 			if isRouter {
 				for addr := range iface.LookupTable {
-
 					lastHeard := iface.LookupTable[addr].LastHeard
 					if !lastHeard.IsZero() {
-
-						// fmt.Println("time since I last heard from the router at " + addr.String() + " is " + time.Since(lastHeard).String())
-
+						//fmt.Println("time since I last heard from the router at " + addr.String() + " is " + time.Since(lastHeard).String())
+						// fmt.Println("Timeout addr: ", addr)
 						if time.Since(lastHeard) >= timeoutLimit {
-							fmt.Println("Timeout exceeded")
+							fmt.Println("Timeout exceeded: ", addr)
 							removeNeighbor(addr) // removes IP address from every NetworkEntry's LookupTable
-							break                // exit loop to stop thread
+							fmt.Println("after removeNeighbor")
 						}
 					}
-
 				}
-
 			}
 
 		}
@@ -536,25 +533,59 @@ func checkNeighbors() {
 func removeNeighbor(ip netip.Addr) { // removes IP address from every NetworkEntry's LookupTable
 
 	fmt.Println("in removeNeighbor")
-	for n := range networkTable {
-		neighbor, exists := networkTable[n].LookupTable[ip]
+	for i := range networkTable {
+
+		for n := range networkTable[i].LookupTable {
+			if networkTable[i].LookupTable[n].NextHop == ip {
+				// if neighbor.UdpConn != nil {
+				// 	neighbor.UdpConn.Close()
+				// }
+
+				// newRipNeighbors := make([]*Neighbor, 0, len(networkTable[i].RipNeighbors))
+				// for _, nb := range networkTable[i].RipNeighbors {
+				// 	if nb.DestAddr != n {
+				// 		newRipNeighbors = append(newRipNeighbors, nb) // Keep valid neighbors
+				// 	} else {
+				// 		fmt.Printf("Removing neighbor with IP: %s\n", ip)
+				// 	}
+				// }
+				//networkTable[i].RipNeighbors = newRipNeighbors
+				// delete(networkTable[i].LookupTable, n) // remove this entry from the LookupTabl
+
+				// fmt.Println("removing ", n, " from LookupTable entry ", networkTable[i])
+				delete(networkTable, i)
+			}
+		}
+		neighbor, exists := networkTable[i].LookupTable[ip]
 
 		if exists {
 			if neighbor.UdpConn != nil {
 				neighbor.UdpConn.Close()
 			}
 
-			newRipNeighbors := make([]*Neighbor, 0, len(networkTable[n].RipNeighbors))
-			for _, nb := range networkTable[n].RipNeighbors {
-				if neighbor.DestAddr != ip {
-					newRipNeighbors = append(newRipNeighbors, nb) // Keep valid neighbors
-				} else {
-					fmt.Printf("Removing neighbor with IP: %s\n", ip)
-				}
-			}
-			networkTable[n].RipNeighbors = newRipNeighbors
-			delete(networkTable[n].LookupTable, ip) // remove this entry from the LookupTable
+			// newRipNeighbors := make([]*Neighbor, 0, len(networkTable[i].RipNeighbors))
+			// for _, nb := range networkTable[i].RipNeighbors {
+			// 	if nb.DestAddr != ip {
+			// 		newRipNeighbors = append(newRipNeighbors, nb) // Keep valid neighbors
+			// 	} else {
+			// 		fmt.Printf("Removing neighbor with IP: %s\n", ip)
+			// 	}
+			// }
+			// networkTable[i].RipNeighbors = newRipNeighbors
+			fmt.Println("removing ", ip, " from LookupTable entry ", networkTable[i])
+			delete(networkTable[i].LookupTable, ip) // remove this entry from the LookupTabl
 
+		}
+		// else {
+		// 	if neighbor.NextHop == ip {
+
+		// 	}
+		// }
+		if i.Contains(ip) {
+			fmt.Println("removing this prefix from network table ", i)
+			//networkTableLock.Lock()
+			delete(networkTable, i)
+			//networkTableLock.Unlock()
 		}
 
 	}

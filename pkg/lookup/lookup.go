@@ -483,6 +483,8 @@ func SendIP(dest netip.Addr, protocolNum uint8, packet []byte) error {
 		return errors.New("TTL expired")
 	}
 
+	header.TTL -= 1
+
 	headerSize := header.Len
 	headerBytes := packet[:headerSize]
 	checksumFromHeader := uint16(header.Checksum)
@@ -533,6 +535,12 @@ func SendIP(dest netip.Addr, protocolNum uint8, packet []byte) error {
 		e := networkTable[bestMatch]
 		fmt.Println("best match interface ip address: ", e.IpAddr)
 		if e.Up {
+			header.Src = e.IpAddr
+			headerBytes, err = header.Marshal()
+			if err != nil {
+				return errors.New("error marshalling header")
+			}
+
 			if e.IsDefault {
 				fmt.Println("Sending to default destination:", e.Default.String())
 				SendIP(e.Default, protocolNum, packet)

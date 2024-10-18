@@ -11,12 +11,11 @@ func callback_test(msg string, nextHop netip.Addr, networkTable map[netip.Prefix
 	fmt.Println("Received test packet: " + msg)
 }
 func main() {
-	fmt.Println("In main!")
-	if len(os.Args) != 2 {
-		fmt.Printf("Usage:  %s <configFile>\n", os.Args[0])
-		os.Exit(1)
-	}
-	fileName := os.Args[1]
+	// if len(os.Args) != 3 {
+	// 	fmt.Printf("Usage:  %s --config <configFile>\n", os.Args[0])
+	// 	os.Exit(1)
+	// }
+	fileName := os.Args[2]
 	lookup.RegisterRecvHandler(0, callback_test)
 	lookup.Initialize(fileName)
 

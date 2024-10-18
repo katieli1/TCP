@@ -7,7 +7,7 @@ import (
 	"os"
 )
 
-func callback_test(msg string, nextHop netip.Addr, networkTable map[netip.Prefix]*lookup.NetworkEntry, maxCost int) {
+func callback_test(msg string, nextHop netip.Addr) {
 	fmt.Println("Received test packet: " + msg)
 }
 func main() {

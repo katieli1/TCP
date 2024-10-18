@@ -88,7 +88,12 @@ func Initialize(fileName string) {
 				go readConn(entry, udpConn)
 
 			}
+			if isRouter {
+				go sendRIPHelper(entry, 1, true) // send initial request for RIP entries on
+			}
 
+		}
+		for _, entry := range networkTable {
 			if isRouter {
 				// for prefix := range networkTable {
 				// 	iface := networkTable[prefix]
@@ -97,10 +102,11 @@ func Initialize(fileName string) {
 				// 	}
 				// }
 			}
-
 		}
+		// if isRouter {
+		// 	go sendRIPHelper(entry, 1, true) // send initial request for RIP entries on
 
-		go sendRIPHelper(entry, 1)
+		// }
 
 	}
 	networkTableLock.RUnlock()
@@ -117,7 +123,7 @@ func Initialize(fileName string) {
 
 func sendRIPData(entry *NetworkEntry) {
 	for {
-		sendRIPHelper(entry, 2)
+		sendRIPHelper(entry, 2, true)
 	}
 }
 
@@ -172,17 +178,27 @@ func Callback_rip(message string, nextHop netip.Addr) {
 		// fmt.Println("Parsed route: address =", addr.String(), ", cost =", cost, ", prefix length =", prefixLength)
 	}
 
+	if uint32(typeOfMessageInt) == 1 {
+		fmt.Println("in callback, type is 1")
+		for addr := range networkTable {
+			entry := networkTable[addr]
+
+			sendRIPHelper(entry, 2, false)
+			fmt.Println("lol")
+		}
+		fmt.Println("outside 1 loop")
+		return
+	}
+
 	for _, route := range routes {
+		fmt.Println("start of route loop")
 		address := pkgUtils.Uint32ToIP(route.Address)
 		prefix := netip.PrefixFrom(address, route.PrefixLength)
 
 		networkAddr := prefix.Masked().Addr()
 		maskedPrefix := netip.PrefixFrom(networkAddr, prefix.Bits())
 		if entry, exists := networkTable[maskedPrefix]; exists {
-			if uint32(typeOfMessageInt) == 1 {
-				sendRIPHelper(entry, 2)
-				return
-			}
+
 			if entry.Name != "" {
 				continue
 			}
@@ -242,13 +258,65 @@ func Callback_rip(message string, nextHop netip.Addr) {
 	// }
 }
 
-func sendRIPHelper(entry *NetworkEntry, command int) {
+func sendRIPHelper(entry *NetworkEntry, command int, shouldLock bool) {
+
 	time.Sleep(ripUpdateRate)
+	fmt.Println("start of send rip helper")
 	if entry.Up {
+		fmt.Println("inside entry.up")
+
 		var messageBuilder strings.Builder
 		num_entries := 0
-		networkTableLock.RLock()
+
+		if command == 1 {
+			for _, neighbor := range entry.RipNeighbors {
+				// fmt.Println("Sending to Rip Neighbor:", neighbor.DestAddr.String())
+
+				startOfMessage := fmt.Sprintf("%d,%d;", command, num_entries)
+				messageBytes := []byte(startOfMessage + fmt.Sprintf("%d,%d,%d", 16, entry.IpPrefix.Bits(), pkgUtils.IpToUint32(entry.IpAddr)))
+				header := &ipv4header.IPv4Header{
+					Version:  4,
+					Len:      20,
+					TTL:      64,
+					Dst:      neighbor.DestAddr,
+					Src:      entry.IpAddr,
+					TotalLen: len(messageBytes) + ipv4header.HeaderLen,
+					Protocol: 200,
+				}
+				headerBytes, err := header.Marshal()
+				if err != nil {
+					fmt.Println("Error marshaling header:", err)
+					return
+				}
+
+				header.Checksum = int(ComputeChecksum(headerBytes))
+				headerBytes, err = header.Marshal()
+				if err != nil {
+					fmt.Println("Error marshaling header after checksum:", err)
+					return
+				}
+
+				packet := append(headerBytes, messageBytes...)
+				// fmt.Println("Sending packet to:", neighbor.DestAddr.String(), "Message:", message)
+
+				fmt.Println("before sendIP in send rip helper")
+				// if command == 1 {
+				// 	return
+				// }
+				SendIP(neighbor.DestAddr, 200, packet)
+				if command == 1 {
+					fmt.Println("end of send rip helper")
+
+				}
+			}
+			return
+		}
+		if shouldLock {
+			networkTableLock.RLock()
+		}
+
 		for _, entry := range networkTable {
+			fmt.Println("inside for loop through entries")
 			// if entry.Up {
 			if entry.IsDefault {
 				continue
@@ -275,7 +343,11 @@ func sendRIPHelper(entry *NetworkEntry, command int) {
 			//}
 
 		}
-		networkTableLock.RUnlock()
+		if shouldLock {
+			networkTableLock.RUnlock()
+		}
+
+		fmt.Println("left for loop for entries")
 
 		message := strings.TrimSuffix(messageBuilder.String(), ";")
 		if message == "" {
@@ -287,7 +359,7 @@ func sendRIPHelper(entry *NetworkEntry, command int) {
 		fullMessage := startOfMessage + message
 
 		messageBytes := []byte(fullMessage)
-		// fmt.Println("Constructed RIP message:", message)
+		fmt.Println("Constructed RIP message:", message)
 
 		for _, neighbor := range entry.RipNeighbors {
 			// fmt.Println("Sending to Rip Neighbor:", neighbor.DestAddr.String())
@@ -314,12 +386,22 @@ func sendRIPHelper(entry *NetworkEntry, command int) {
 			}
 
 			if command == 1 { // TODO: take a closer look at this
-				messageBytes = []byte(startOfMessage + fmt.Sprintf("%d,%d,%d;", 0, entry.IpPrefix.Bits(), pkgUtils.IpToUint32(entry.IpAddr)))
+
+				messageBytes = []byte(startOfMessage + fmt.Sprintf("%d,%d,%d", 16, entry.IpPrefix.Bits(), pkgUtils.IpToUint32(entry.IpAddr)))
 			}
 
 			packet := append(headerBytes, messageBytes...)
 			// fmt.Println("Sending packet to:", neighbor.DestAddr.String(), "Message:", message)
+
+			fmt.Println("before sendIP in send rip helper")
+			// if command == 1 {
+			// 	return
+			// }
 			SendIP(neighbor.DestAddr, 200, packet)
+			if command == 1 {
+				fmt.Println("end of send rip helper")
+
+			}
 		}
 	}
 }
@@ -574,7 +656,6 @@ func removeNeighbor(ip netip.Addr) { // removes IP address from every NetworkEnt
 			if neighbor.UdpConn != nil {
 				neighbor.UdpConn.Close()
 			}
-
 			fmt.Println("removing ", ip, " from LookupTable entry ", networkTable[i])
 			delete(networkTable[i].LookupTable, ip) // remove this entry from the LookupTabl
 
@@ -606,7 +687,8 @@ func createUdpConn(neighbor *Neighbor) {
 }
 
 func SendIP(dest netip.Addr, protocolNum uint8, packet []byte) error {
-	if protocolNum == 0 {
+	fmt.Println("in send ip")
+	if protocolNum == 200 {
 		fmt.Println("Start of SendIP function, Destination:", dest.String())
 	}
 	header, err := ipv4header.ParseHeader(packet[:ipv4header.HeaderLen])
@@ -732,6 +814,7 @@ func populateTable(fileName string) {
 	}
 	ripUpdateRate = lnxConfig.RipPeriodicUpdateRate
 	timeoutLimit = lnxConfig.RipTimeoutThreshold
+	// timeoutLimit = 1000000000000000000
 
 	for _, iface := range lnxConfig.Interfaces {
 		prefixForm := netip.PrefixFrom(iface.AssignedIP, iface.AssignedPrefix.Bits())

@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
-	"github.com/google/netstack/tcpip/header"
 	ipv4header "ip/pkg/header-parser"
 	"ip/pkg/lnxconfig"
 	"ip/pkg/pkgUtils"
@@ -16,6 +15,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/google/netstack/tcpip/header"
 )
 
 var networkTableLock sync.RWMutex
@@ -85,7 +86,7 @@ func Initialize(fileName string) {
 			}
 			for range entry.LookupTable {
 				go readConn(entry, udpConn)
-				sendRIPHelper(entry, 1)
+
 			}
 
 			if isRouter {
@@ -98,6 +99,8 @@ func Initialize(fileName string) {
 			}
 
 		}
+
+		go sendRIPHelper(entry, 1)
 
 	}
 	networkTableLock.RUnlock()
@@ -114,13 +117,12 @@ func Initialize(fileName string) {
 
 func sendRIPData(entry *NetworkEntry) {
 	for {
-		time.Sleep(ripUpdateRate)
 		sendRIPHelper(entry, 2)
 	}
 }
 
 func Callback_rip(message string, nextHop netip.Addr) {
-	var changed = false
+	//var changed = false
 	var routes []RouteInfo
 	entries := strings.Split(message, ";")
 	typeOfMessage := strings.Split(entries[0], ",")[0]
@@ -131,15 +133,13 @@ func Callback_rip(message string, nextHop netip.Addr) {
 		return
 	}
 
-	if uint32(typeOfMessageInt) == 1 {
-		return
-	}
-
 	entriesWithoutMetadata := entries[1:]
 	for _, entry := range entriesWithoutMetadata {
 		fields := strings.Split(entry, ",")
+		fmt.Println(fields)
 		if len(fields) != 3 {
-			fmt.Println("Skipping malformed entry:", entry)
+
+			fmt.Println("Skipping malformed entry:", entry, "length is ", len(fields))
 			continue
 		}
 
@@ -155,7 +155,11 @@ func Callback_rip(message string, nextHop netip.Addr) {
 			continue
 		}
 
-		result, err := netip.ParseAddr(strings.TrimSpace(strings.ReplaceAll(fields[2], "\x00", "")))
+		cleanedString := strings.TrimSpace(strings.ReplaceAll(fields[2], "\x00", ""))
+
+		value, _ := strconv.ParseUint(cleanedString, 10, 32)
+
+		result := pkgUtils.Uint32ToIP(uint32(value))
 		if err != nil {
 			fmt.Println("Invalid address:", fields[2], "Error:", err)
 			continue
@@ -175,6 +179,10 @@ func Callback_rip(message string, nextHop netip.Addr) {
 		networkAddr := prefix.Masked().Addr()
 		maskedPrefix := netip.PrefixFrom(networkAddr, prefix.Bits())
 		if entry, exists := networkTable[maskedPrefix]; exists {
+			if uint32(typeOfMessageInt) == 1 {
+				sendRIPHelper(entry, 2)
+				return
+			}
 			if entry.Name != "" {
 				continue
 			}
@@ -187,7 +195,7 @@ func Callback_rip(message string, nextHop netip.Addr) {
 					neighbor.Cost = newCost
 					neighbor.NextHop = nextHop
 					entry.LookupTable[address].LastHeard = time.Now()
-					changed = true
+					//changed = true
 				}
 			} else {
 				fmt.Println("Adding new neighbor:", address.String())
@@ -199,7 +207,7 @@ func Callback_rip(message string, nextHop netip.Addr) {
 					NextHop:  nextHop,
 					WillHop:  true,
 				}
-				changed = true
+				//changed = true
 			}
 
 		} else {
@@ -219,22 +227,23 @@ func Callback_rip(message string, nextHop netip.Addr) {
 				LastHeard: time.Now(),
 			}
 			networkTable[maskedPrefix] = newEntry
-			changed = true
+			//changed = true
 		}
 
 	}
-	if changed {
-		for _, entry := range networkTable {
-			// for entryItems := range entry{
-			if len(entry.RipNeighbors) > 0 {
-				sendRIPHelper(entry, 2)
-			}
-			// }
-		}
-	}
+	// if changed {
+	// 	// for _, entry := range networkTable {
+	// 	// 	// for entryItems := range entry{
+	// 	// 	if len(entry.RipNeighbors) > 0 {
+	// 	// 		sendRIPHelper(entry, 2)
+	// 	// 	}
+	// 	// 	// }
+	// 	// }
+	// }
 }
 
 func sendRIPHelper(entry *NetworkEntry, command int) {
+	time.Sleep(ripUpdateRate)
 	if entry.Up {
 		var messageBuilder strings.Builder
 		num_entries := 0
@@ -254,13 +263,13 @@ func sendRIPHelper(entry *NetworkEntry, command int) {
 				cost = neighbor.Cost
 				// }
 
-				message := fmt.Sprintf("%d,%d,%s;", cost, entry.IpPrefix.Bits(), pkgUtils.IpToUint32(neighbor.DestAddr))
+				message := fmt.Sprintf("%d,%d,%d;", cost, entry.IpPrefix.Bits(), pkgUtils.IpToUint32(neighbor.DestAddr))
 				messageBuilder.WriteString(message)
 				num_entries += 1
 				// fmt.Println("Appending to message:", message)
 			}
 
-			me := fmt.Sprintf("%d,%d,%s;", 0, entry.IpPrefix.Bits(), pkgUtils.IpToUint32(entry.IpAddr))
+			me := fmt.Sprintf("%d,%d,%d;", 0, entry.IpPrefix.Bits(), pkgUtils.IpToUint32(entry.IpAddr))
 			messageBuilder.WriteString(me)
 			num_entries += 1
 			//}
@@ -302,6 +311,10 @@ func sendRIPHelper(entry *NetworkEntry, command int) {
 			if err != nil {
 				fmt.Println("Error marshaling header after checksum:", err)
 				return
+			}
+
+			if command == 1 { // TODO: take a closer look at this
+				messageBytes = []byte(startOfMessage + fmt.Sprintf("%d,%d,%d;", 0, entry.IpPrefix.Bits(), pkgUtils.IpToUint32(entry.IpAddr)))
 			}
 
 			packet := append(headerBytes, messageBytes...)

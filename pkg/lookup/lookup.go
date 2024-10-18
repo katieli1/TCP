@@ -130,9 +130,6 @@ func Callback_rip(message string, nextHop netip.Addr) {
 		return
 	}
 
-	if uint32(typeOfMessageInt) == 1 {
-		return
-	}
 
 
 	entriesWithoutMetadata := entries[1:] 
@@ -175,6 +172,10 @@ func Callback_rip(message string, nextHop netip.Addr) {
 		networkAddr := prefix.Masked().Addr()
 		maskedPrefix := netip.PrefixFrom(networkAddr, prefix.Bits())
 		if entry, exists := networkTable[maskedPrefix]; exists {
+			if uint32(typeOfMessageInt) == 1 {
+				sendRIPHelper(entry,2)
+				return
+			}
 			if entry.Name != "" {
 				continue
 			}
@@ -304,6 +305,10 @@ func sendRIPHelper(entry *NetworkEntry, command int){
 				if err != nil {
 					fmt.Println("Error marshaling header after checksum:", err)
 					return
+				}
+
+				if command == 1 {
+					messageBytes := []byte(startOfMessage + fmt.Sprintf("%d,%d,%s;", 0, entry.IpPrefix.Bits(), pkgUtils.IpToUint32(entry.IpAddr)))
 				}
 
 				packet := append(headerBytes, messageBytes...)

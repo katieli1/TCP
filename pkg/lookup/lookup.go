@@ -89,7 +89,7 @@ func Initialize(fileName string) {
 
 			}
 			if isRouter {
-				go sendRIPHelper(entry, 1, true) // send initial request for RIP entries on
+				go sendRIPHelper(entry, 1, false) // send initial request for RIP entries on
 			}
 
 		}
@@ -103,10 +103,10 @@ func Initialize(fileName string) {
 				// }
 			}
 		}
-		// if isRouter {
-		// 	go sendRIPHelper(entry, 1, true) // send initial request for RIP entries on
+		if isRouter {
+			go sendRIPHelper(entry, 1, true) // send initial request for RIP entries on
 
-		// }
+		}
 
 	}
 	networkTableLock.RUnlock()
@@ -123,7 +123,7 @@ func Initialize(fileName string) {
 
 func sendRIPData(entry *NetworkEntry) {
 	for {
-		sendRIPHelper(entry, 2, true)
+		sendRIPHelper(entry, 2, false)
 	}
 }
 
@@ -303,10 +303,10 @@ func sendRIPHelper(entry *NetworkEntry, command int, shouldLock bool) {
 				// if command == 1 {
 				// 	return
 				// }
-				SendIP(neighbor.DestAddr, 200, packet)
+				SendIP(neighbor.DestAddr, 200, packet, shouldLock)
+				fmt.Println("Packet in sendRIPHelper: ", packet)
 				if command == 1 {
 					fmt.Println("end of send rip helper")
-
 				}
 			}
 			return
@@ -354,9 +354,12 @@ func sendRIPHelper(entry *NetworkEntry, command int, shouldLock bool) {
 			fmt.Println("No routes to send.")
 			return
 		}
+
 		startOfMessage := fmt.Sprintf("%d,%d;", command, num_entries)
 
 		fullMessage := startOfMessage + message
+
+		fmt.Println("full rip message: ", fullMessage)
 
 		messageBytes := []byte(fullMessage)
 		fmt.Println("Constructed RIP message:", message)
@@ -385,10 +388,10 @@ func sendRIPHelper(entry *NetworkEntry, command int, shouldLock bool) {
 				return
 			}
 
-			if command == 1 { // TODO: take a closer look at this
+			// if command == 1 { // TODO: take a closer look at this
 
-				messageBytes = []byte(startOfMessage + fmt.Sprintf("%d,%d,%d", 16, entry.IpPrefix.Bits(), pkgUtils.IpToUint32(entry.IpAddr)))
-			}
+			// 	messageBytes = []byte(startOfMessage + fmt.Sprintf("%d,%d,%d", 16, entry.IpPrefix.Bits(), pkgUtils.IpToUint32(entry.IpAddr)))
+			// }
 
 			packet := append(headerBytes, messageBytes...)
 			// fmt.Println("Sending packet to:", neighbor.DestAddr.String(), "Message:", message)
@@ -397,10 +400,9 @@ func sendRIPHelper(entry *NetworkEntry, command int, shouldLock bool) {
 			// if command == 1 {
 			// 	return
 			// }
-			SendIP(neighbor.DestAddr, 200, packet)
+			SendIP(neighbor.DestAddr, 200, packet, shouldLock)
 			if command == 1 {
 				fmt.Println("end of send rip helper")
-
 			}
 		}
 	}
@@ -550,7 +552,7 @@ func REPL() {
 				packet := append(headerBytes, payload...) // Append payload to header
 				// fmt.Printf("Data bytes: %v\n", packet)    // Print bytes as slice
 				// fmt.Printf("Data as string: %s\n", string(packet))
-				SendIP(dest, 0, packet)
+				SendIP(dest, 0, packet, true)
 			}
 
 		} else {
@@ -603,7 +605,7 @@ func readConn(iface *NetworkEntry, conn net.Conn) {
 			if header.Protocol == 200 {
 				protocol = 200
 			}
-			SendIP(header.Dst, protocol, buf)
+			SendIP(header.Dst, protocol, buf, true)
 		}
 	}
 }
@@ -686,7 +688,7 @@ func createUdpConn(neighbor *Neighbor) {
 	neighbor.UdpConn = conn
 }
 
-func SendIP(dest netip.Addr, protocolNum uint8, packet []byte) error {
+func SendIP(dest netip.Addr, protocolNum uint8, packet []byte, shouldLock bool) error {
 	fmt.Println("in send ip")
 	if protocolNum == 200 {
 		fmt.Println("Start of SendIP function, Destination:", dest.String())
@@ -719,7 +721,10 @@ func SendIP(dest netip.Addr, protocolNum uint8, packet []byte) error {
 	}
 
 	var bestMatch netip.Prefix
-	networkTableLock.RLock()
+	if shouldLock {
+		networkTableLock.RLock()
+	}
+
 	for prefix := range networkTable {
 		addr := networkTable[prefix].IpAddr
 		if addr == header.Dst && networkTable[prefix].Name != "" {
@@ -727,7 +732,10 @@ func SendIP(dest netip.Addr, protocolNum uint8, packet []byte) error {
 			if callback, found := handlerTable[protocolNum]; found {
 				fmt.Println("Invoking handler callback for protocol:", protocolNum)
 				callback(string(message), header.Src)
-				networkTableLock.RUnlock()
+				if shouldLock {
+					networkTableLock.RUnlock()
+				}
+
 				return nil
 			}
 		}
@@ -743,7 +751,9 @@ func SendIP(dest netip.Addr, protocolNum uint8, packet []byte) error {
 			}
 		}
 	}
-	networkTableLock.RUnlock()
+	if shouldLock {
+		networkTableLock.RUnlock()
+	}
 
 	if bestMatch.IsValid() {
 		if protocolNum == 0 {
@@ -760,7 +770,7 @@ func SendIP(dest netip.Addr, protocolNum uint8, packet []byte) error {
 
 			if e.IsDefault {
 				fmt.Println("Sending to default destination:", e.Default.String())
-				SendIP(e.Default, protocolNum, packet)
+				SendIP(e.Default, protocolNum, packet, shouldLock)
 				return nil
 			}
 			if protocolNum == 0 {
@@ -781,7 +791,7 @@ func SendIP(dest netip.Addr, protocolNum uint8, packet []byte) error {
 					if protocolNum == 0 {
 						fmt.Println("Will hop to:", e.IpAddr.String())
 					}
-					SendIP(e.IpAddr, protocolNum, packet)
+					SendIP(e.IpAddr, protocolNum, packet, shouldLock)
 					return nil
 				}
 				_, err := neighbor.UdpConn.Write(packet)

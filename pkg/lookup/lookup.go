@@ -88,27 +88,23 @@ func Initialize(fileName string) {
 				go readConn(entry, udpConn)
 
 			}
-			if isRouter {
-				go sendRIPHelper(entry, 1, false) // send initial request for RIP entries on
-			}
+			// if isRouter {
+			// 	go sendRIPHelper(entry, 1, false) // send initial request for RIP entries on
+			// }
 
-		}
-		for _, entry := range networkTable {
 			if isRouter {
 				// for prefix := range networkTable {
 				// 	iface := networkTable[prefix]
 				// 	if !iface.IsDefault {
 				go sendRIPData(entry)
+				go sendRIPHelper(entry, 1, true) // send initial request for RIP entries on
 				// 	}
 				// }
 			}
 		}
-		if isRouter {
-			go sendRIPHelper(entry, 1, true) // send initial request for RIP entries on
-
-		}
 
 	}
+
 	networkTableLock.RUnlock()
 	go checkNeighbors()
 
@@ -207,6 +203,7 @@ func Callback_rip(message string, nextHop netip.Addr) {
 			if neighbor, found := entry.LookupTable[address]; found {
 				//poison reverse - split horizon
 				newCost := route.Cost + 1
+
 				if newCost >= maxCost {
 					neighbor.Cost = maxCost
 				} else if neighbor.NextHop == nextHop || neighbor.Cost > newCost {

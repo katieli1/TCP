@@ -123,12 +123,14 @@ func Initialize(fileName string) {
 
 func sendRIPData(entry *NetworkEntry) {
 	for {
+		time.Sleep(ripUpdateRate)
 		sendRIPHelper(entry, 2, false)
 	}
 }
 
 func Callback_rip(message string, nextHop netip.Addr) {
-	//var changed = false
+	var changed = false
+	var changedEntry *NetworkEntry
 	var routes []RouteInfo
 	entries := strings.Split(message, ";")
 	typeOfMessage := strings.Split(entries[0], ",")[0]
@@ -211,7 +213,8 @@ func Callback_rip(message string, nextHop netip.Addr) {
 					neighbor.Cost = newCost
 					neighbor.NextHop = nextHop
 					entry.LookupTable[address].LastHeard = time.Now()
-					//changed = true
+					changed = true
+					changedEntry = entry
 				}
 			} else {
 				fmt.Println("Adding new neighbor:", address.String())
@@ -223,7 +226,8 @@ func Callback_rip(message string, nextHop netip.Addr) {
 					NextHop:  nextHop,
 					WillHop:  true,
 				}
-				//changed = true
+				changed = true
+				changedEntry = entry
 			}
 
 		} else {
@@ -243,24 +247,24 @@ func Callback_rip(message string, nextHop netip.Addr) {
 				LastHeard: time.Now(),
 			}
 			networkTable[maskedPrefix] = newEntry
-			//changed = true
+			changed = true
+			changedEntry = newEntry
 		}
 
 	}
-	// if changed {
-	// 	// for _, entry := range networkTable {
-	// 	// 	// for entryItems := range entry{
-	// 	// 	if len(entry.RipNeighbors) > 0 {
-	// 	// 		sendRIPHelper(entry, 2)
-	// 	// 	}
-	// 	// 	// }
-	// 	// }
-	// }
+	if changed {
+		//for _, entry := range networkTable {
+		// for entryItems := range entry{
+		//if len(entry.RipNeighbors) > 0 {
+		sendRIPHelper(changedEntry, 2, false)
+		//}
+		// }
+		//}
+	}
 }
 
 func sendRIPHelper(entry *NetworkEntry, command int, shouldLock bool) {
 
-	time.Sleep(ripUpdateRate)
 	fmt.Println("start of send rip helper")
 	if entry.Up {
 		fmt.Println("inside entry.up")

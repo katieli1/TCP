@@ -432,15 +432,21 @@ func repl() { // manages command line interface
 						}
 						seenPrefixes = append(seenPrefixes, iface.IpPrefix.String())
 
-						var interfaceName string
-						for j := range networkTable {
-							e, exists := networkTable[j].LookupTable[neighbor.NextHop]
-							if exists {
-								interfaceName = e.InterfaceName
-								break
+						nextHop := neighbor.NextHop.String()
+
+						if t == "L       " {
+							for j := range networkTable {
+								e, exists := networkTable[j].LookupTable[neighbor.NextHop]
+
+								if exists {
+									nextHop = "LOCAL:" + e.InterfaceName
+									break
+								}
 							}
+
 						}
-						fmt.Println(t+iface.IpPrefix.String()+"   "+interfaceName+"       ", neighbor.Cost-1)
+
+						fmt.Println(t+iface.IpPrefix.String()+"   "+nextHop+"       ", neighbor.Cost-1)
 					}
 				}
 			}
@@ -525,10 +531,7 @@ func readConn(iface *NetworkEntry, conn net.Conn) { // thread that continously r
 				fmt.Println("Error parsing header:", err)
 				continue
 			}
-			if header.Protocol == 0 {
-				fmt.Println("recieved src: ", header.Src)
 
-			}
 			SendIP(header.Dst, uint8(header.Protocol), buf, true) // process data
 		}
 	}
@@ -608,7 +611,6 @@ func SendIP(dest netip.Addr, protocolNum uint8, packet []byte, shouldLock bool) 
 
 	// determine which interface to send out of to set source IP address
 	if header.Src == netip.AddrFrom4([4]byte{0, 0, 0, 0}) || !header.Src.IsValid() {
-		fmt.Println("initializing src")
 		var src netip.Addr
 		for i := range networkTable {
 			if networkTable[i].Name != "" { //only interfaces that are my own have names

@@ -54,6 +54,8 @@ type Neighbor struct {
 
 type LookupTable map[netip.Addr]*Neighbor
 
+var RipNeighborsMap = make(map[netip.Addr]netip.Addr)
+
 // Combined table for interfaces and static routes
 var networkTable = make(map[netip.Prefix]*NetworkEntry)
 
@@ -88,29 +90,17 @@ func Initialize(fileName string) {
 				go readConn(entry, udpConn)
 
 			}
-			if isRouter {
-				go sendRIPHelper(entry, 1, false) // send initial request for RIP entries on
-			}
-
 		}
-		for _, entry := range networkTable {
-			if isRouter {
-				// for prefix := range networkTable {
-				// 	iface := networkTable[prefix]
-				// 	if !iface.IsDefault {
-				go sendRIPData(entry)
-				// 	}
-				// }
-			}
-		}
-		if isRouter {
-			go sendRIPHelper(entry, 1, true) // send initial request for RIP entries on
-
-		}
-
 	}
+
 	networkTableLock.RUnlock()
-	go checkNeighbors()
+	if isRouter {
+		for dest := range RipNeighborsMap {
+			go sendRipRequest(dest, true)
+			go sendRIPData(dest)
+		}
+		go checkNeighbors()
+	}
 
 	done := make(chan struct{})
 	go func() {
@@ -121,16 +111,16 @@ func Initialize(fileName string) {
 	<-done
 }
 
-func sendRIPData(entry *NetworkEntry) {
+func sendRIPData(dest netip.Addr) {
 	for {
 		time.Sleep(ripUpdateRate)
-		sendRIPHelper(entry, 2, false)
+		sendRIPHelper(dest, false,nil)
 	}
 }
 
 func Callback_rip(message string, nextHop netip.Addr) {
 	var changed = false
-	var changedEntry *NetworkEntry
+	var changedEntry []*Neighbor
 	var routes []RouteInfo
 	entries := strings.Split(message, ";")
 	typeOfMessage := strings.Split(entries[0], ",")[0]
@@ -181,14 +171,9 @@ func Callback_rip(message string, nextHop netip.Addr) {
 	}
 
 	if uint32(typeOfMessageInt) == 1 {
-		fmt.Println("in callback, type is 1")
-		for addr := range networkTable {
-			entry := networkTable[addr]
-
-			sendRIPHelper(entry, 2, false)
-			fmt.Println("lol")
+		for addr := range RipNeighborsMap {
+			sendRIPHelper(addr, false,nil)
 		}
-		fmt.Println("outside 1 loop")
 		return
 	}
 
@@ -196,7 +181,7 @@ func Callback_rip(message string, nextHop netip.Addr) {
 		fmt.Println("start of route loop")
 		address := pkgUtils.Uint32ToIP(route.Address)
 		prefix := netip.PrefixFrom(address, route.PrefixLength)
-
+		
 		networkAddr := prefix.Masked().Addr()
 		maskedPrefix := netip.PrefixFrom(networkAddr, prefix.Bits())
 		if entry, exists := networkTable[maskedPrefix]; exists {
@@ -207,14 +192,17 @@ func Callback_rip(message string, nextHop netip.Addr) {
 			if neighbor, found := entry.LookupTable[address]; found {
 				//poison reverse - split horizon
 				newCost := route.Cost + 1
-				if newCost >= maxCost {
-					neighbor.Cost = maxCost
-				} else if neighbor.NextHop == nextHop || neighbor.Cost > newCost {
+				if newCost > maxCost {
+					continue
+				}
+				if (neighbor.NextHop == nextHop) || neighbor.Cost > newCost {
+					if (neighbor.Cost != newCost){
+						changed = true
+						changedEntry = append(changedEntry, neighbor)
+					}
 					neighbor.Cost = newCost
 					neighbor.NextHop = nextHop
 					entry.LookupTable[address].LastHeard = time.Now()
-					changed = true
-					changedEntry = entry
 				}
 			} else {
 				fmt.Println("Adding new neighbor:", address.String())
@@ -227,7 +215,7 @@ func Callback_rip(message string, nextHop netip.Addr) {
 					WillHop:  true,
 				}
 				changed = true
-				changedEntry = entry
+				changedEntry = append(changedEntry, entry.LookupTable[address])
 			}
 
 		} else {
@@ -248,169 +236,126 @@ func Callback_rip(message string, nextHop netip.Addr) {
 			}
 			networkTable[maskedPrefix] = newEntry
 			changed = true
-			changedEntry = newEntry
+			changedEntry = append(changedEntry, newEntry.LookupTable[address])
+
 		}
 
 	}
 	if changed {
-		//for _, entry := range networkTable {
-		// for entryItems := range entry{
-		//if len(entry.RipNeighbors) > 0 {
-		sendRIPHelper(changedEntry, 2, false)
-		//}
-		// }
-		//}
+		for addr := range RipNeighborsMap {
+			if (len(changedEntry) >0){
+sendRIPHelper(addr, false, changedEntry) 
+			}
+			// sendRIPHelper(addr, false, changedEntry) // change this so it only sends the given entry
+		}
 	}
 }
 
-func sendRIPHelper(entry *NetworkEntry, command int, shouldLock bool) {
+func sendRipRequest(dest netip.Addr, shouldLock bool){
+	startOfMessage := fmt.Sprintf("%d,%d;", 1, 0)
+	messageBytes := []byte(startOfMessage + fmt.Sprintf("%d,%d,%d", 16, 10, pkgUtils.IpToUint32(RipNeighborsMap[dest])))
+	headerBytes, err := createHeader(dest,RipNeighborsMap[dest],len(messageBytes))
+	if err != nil {
+		return
+	}
+	packet := append(headerBytes, messageBytes...)
+	SendIP(dest, 200, packet, shouldLock,"sendIpRipRequest")
+}
 
-	fmt.Println("start of send rip helper")
-	if entry.Up {
-		fmt.Println("inside entry.up")
+func sendRIPHelper(dest netip.Addr, shouldLock bool, manualEntries []*Neighbor) {
+	var messageBuilder strings.Builder
+	num_entries := 0
 
-		var messageBuilder strings.Builder
-		num_entries := 0
-
-		if command == 1 {
-			for _, neighbor := range entry.RipNeighbors {
-				// fmt.Println("Sending to Rip Neighbor:", neighbor.DestAddr.String())
-
-				startOfMessage := fmt.Sprintf("%d,%d;", command, num_entries)
-				messageBytes := []byte(startOfMessage + fmt.Sprintf("%d,%d,%d", 16, entry.IpPrefix.Bits(), pkgUtils.IpToUint32(entry.IpAddr)))
-				header := &ipv4header.IPv4Header{
-					Version:  4,
-					Len:      20,
-					TTL:      64,
-					Dst:      neighbor.DestAddr,
-					Src:      entry.IpAddr,
-					TotalLen: len(messageBytes) + ipv4header.HeaderLen,
-					Protocol: 200,
-				}
-				headerBytes, err := header.Marshal()
-				if err != nil {
-					fmt.Println("Error marshaling header:", err)
-					return
-				}
-
-				header.Checksum = int(ComputeChecksum(headerBytes))
-				headerBytes, err = header.Marshal()
-				if err != nil {
-					fmt.Println("Error marshaling header after checksum:", err)
-					return
-				}
-
-				packet := append(headerBytes, messageBytes...)
-				// fmt.Println("Sending packet to:", neighbor.DestAddr.String(), "Message:", message)
-
-				fmt.Println("before sendIP in send rip helper")
-				// if command == 1 {
-				// 	return
-				// }
-				SendIP(neighbor.DestAddr, 200, packet, shouldLock)
-				fmt.Println("Packet in sendRIPHelper: ", packet)
-				if command == 1 {
-					fmt.Println("end of send rip helper")
-				}
-			}
-			return
-		}
+	if manualEntries == nil{
 		if shouldLock {
 			networkTableLock.RLock()
 		}
 
 		for _, entry := range networkTable {
-			fmt.Println("inside for loop through entries")
-			// if entry.Up {
 			if entry.IsDefault {
 				continue
 			}
 			for _, neighbor := range entry.LookupTable {
 				var cost int
-				//split horizon
-				// if neighbor.NextHop == entry.IpAddr {
-				// 	// Poison reverse
-				// 	cost = math.MaxInt
-				// } else {
 				cost = neighbor.Cost
-				// }
-
+				if dest == neighbor.NextHop {
+					cost = 17
+				}
 				message := fmt.Sprintf("%d,%d,%d;", cost, entry.IpPrefix.Bits(), pkgUtils.IpToUint32(neighbor.DestAddr))
 				messageBuilder.WriteString(message)
 				num_entries += 1
-				// fmt.Println("Appending to message:", message)
-			}
 
-			me := fmt.Sprintf("%d,%d,%d;", 0, entry.IpPrefix.Bits(), pkgUtils.IpToUint32(entry.IpAddr))
-			messageBuilder.WriteString(me)
-			num_entries += 1
-			//}
+			}
+			// if entry.Name != ""{
+				me := fmt.Sprintf("%d,%d,%d;", 0, entry.IpPrefix.Bits(), pkgUtils.IpToUint32(entry.IpAddr))
+				messageBuilder.WriteString(me)
+				num_entries += 1
+			// }
 
 		}
 		if shouldLock {
 			networkTableLock.RUnlock()
 		}
-
-		fmt.Println("left for loop for entries")
-
-		message := strings.TrimSuffix(messageBuilder.String(), ";")
-		if message == "" {
-			fmt.Println("No routes to send.")
-			return
-		}
-
-		startOfMessage := fmt.Sprintf("%d,%d;", command, num_entries)
-
-		fullMessage := startOfMessage + message
-
-		fmt.Println("full rip message: ", fullMessage)
-
-		messageBytes := []byte(fullMessage)
-		fmt.Println("Constructed RIP message:", message)
-
-		for _, neighbor := range entry.RipNeighbors {
-			// fmt.Println("Sending to Rip Neighbor:", neighbor.DestAddr.String())
-			header := &ipv4header.IPv4Header{
-				Version:  4,
-				Len:      20,
-				TTL:      64,
-				Dst:      neighbor.DestAddr,
-				Src:      entry.IpAddr,
-				TotalLen: len(message) + ipv4header.HeaderLen,
-				Protocol: 200,
+	}else{
+		for _,neighbor := range manualEntries {
+			
+			var cost int
+			cost = neighbor.Cost
+			if dest == neighbor.NextHop {
+				cost = 17
 			}
-			headerBytes, err := header.Marshal()
-			if err != nil {
-				fmt.Println("Error marshaling header:", err)
-				return
-			}
-
-			header.Checksum = int(ComputeChecksum(headerBytes))
-			headerBytes, err = header.Marshal()
-			if err != nil {
-				fmt.Println("Error marshaling header after checksum:", err)
-				return
-			}
-
-			// if command == 1 { // TODO: take a closer look at this
-
-			// 	messageBytes = []byte(startOfMessage + fmt.Sprintf("%d,%d,%d", 16, entry.IpPrefix.Bits(), pkgUtils.IpToUint32(entry.IpAddr)))
-			// }
-
-			packet := append(headerBytes, messageBytes...)
-			// fmt.Println("Sending packet to:", neighbor.DestAddr.String(), "Message:", message)
-
-			fmt.Println("before sendIP in send rip helper")
-			// if command == 1 {
-			// 	return
-			// }
-			SendIP(neighbor.DestAddr, 200, packet, shouldLock)
-			if command == 1 {
-				fmt.Println("end of send rip helper")
-			}
+			message := fmt.Sprintf("%d,%d,%d;", cost, neighbor.IpPrefix.Bits(), pkgUtils.IpToUint32(neighbor.DestAddr))
+			messageBuilder.WriteString(message)
+			num_entries += 1
 		}
 	}
+	message := strings.TrimSuffix(messageBuilder.String(), ";")
+	if message == "" {
+		fmt.Println("No routes to send.")
+		return
+	}
+
+	startOfMessage := fmt.Sprintf("%d,%d;", 2, num_entries)
+
+	fullMessage := startOfMessage + message
+
+	messageBytes := []byte(fullMessage)
+
+	headerBytes, err := createHeader(dest,RipNeighborsMap[dest],len(message))
+	if err != nil {
+		return
+	}
+	packet := append(headerBytes, messageBytes...)
+	SendIP(dest, 200, packet, shouldLock,"SendRip")
 }
+
+func createHeader(dest netip.Addr, src netip.Addr, length int) ([]byte, error) {
+    header := &ipv4header.IPv4Header{
+        Version:  4,
+        Len:      20,
+        TTL:      64,
+        Dst:      dest,
+        Src:      src,
+        TotalLen: length + ipv4header.HeaderLen,
+        Protocol: 200,
+    }
+
+    headerBytes, err := header.Marshal()
+    if err != nil {
+        fmt.Println("Error marshaling header:", err)
+        return nil, err // Return nil and the error
+    }
+
+    header.Checksum = int(ComputeChecksum(headerBytes))
+    headerBytes, err = header.Marshal()
+    if err != nil {
+        fmt.Println("Error marshaling header after checksum:", err)
+        return nil, err // Return nil and the error
+    }
+    
+    return headerBytes, nil // Return the headerBytes and nil for no error
+}
+
 
 func RegisterRecvHandler(protocolNum uint8, callbackFunc HandlerFunc) error {
 	if protocolNum != 0 && protocolNum != 200 {
@@ -556,7 +501,7 @@ func REPL() {
 				packet := append(headerBytes, payload...) // Append payload to header
 				// fmt.Printf("Data bytes: %v\n", packet)    // Print bytes as slice
 				// fmt.Printf("Data as string: %s\n", string(packet))
-				SendIP(dest, 0, packet, true)
+				SendIP(dest, 0, packet, true,"repl")
 			}
 
 		} else {
@@ -604,12 +549,11 @@ func readConn(iface *NetworkEntry, conn net.Conn) {
 				fmt.Println("Error parsing header:", err)
 				continue
 			}
-
-			var protocol uint8 = 0
-			if header.Protocol == 200 {
-				protocol = 200
+			if header.Protocol == 0 {
+				fmt.Println("interface readConn: ",iface.IpAddr)
+				fmt.Println("Package From: ",header.Src)
 			}
-			SendIP(header.Dst, protocol, buf, true)
+			SendIP(header.Dst, uint8(header.Protocol), buf, true,"readConn")
 		}
 	}
 }
@@ -692,8 +636,8 @@ func createUdpConn(neighbor *Neighbor) {
 	neighbor.UdpConn = conn
 }
 
-func SendIP(dest netip.Addr, protocolNum uint8, packet []byte, shouldLock bool) error {
-	fmt.Println("in send ip")
+func SendIP(dest netip.Addr, protocolNum uint8, packet []byte, shouldLock bool, from string) error {
+	fmt.Println("in send ip from: ", from)
 	if protocolNum == 200 {
 		fmt.Println("Start of SendIP function, Destination:", dest.String())
 	}
@@ -764,7 +708,6 @@ func SendIP(dest netip.Addr, protocolNum uint8, packet []byte, shouldLock bool) 
 			fmt.Println("Best match prefix found:", bestMatch.String())
 		}
 		e := networkTable[bestMatch]
-		fmt.Println("best match interface ip address: ", e.IpAddr)
 		if e.Up {
 			header.Src = e.IpAddr
 			headerBytes, err = header.Marshal()
@@ -774,7 +717,7 @@ func SendIP(dest netip.Addr, protocolNum uint8, packet []byte, shouldLock bool) 
 
 			if e.IsDefault {
 				fmt.Println("Sending to default destination:", e.Default.String())
-				SendIP(e.Default, protocolNum, packet, shouldLock)
+				SendIP(e.Default, protocolNum, packet, shouldLock, "sendIpDefault")
 				return nil
 			}
 			if protocolNum == 0 {
@@ -795,10 +738,13 @@ func SendIP(dest netip.Addr, protocolNum uint8, packet []byte, shouldLock bool) 
 					if protocolNum == 0 {
 						fmt.Println("Will hop to:", e.IpAddr.String())
 					}
-					SendIP(e.IpAddr, protocolNum, packet, shouldLock)
+					SendIP(e.IpAddr, protocolNum, packet, shouldLock,"sendIpNextHop")
 					return nil
 				}
 				_, err := neighbor.UdpConn.Write(packet)
+				if protocolNum == 0 {
+					fmt.Println("written to: ", neighbor.DestAddr.String())
+				}
 				if err != nil {
 					fmt.Println("Error writing to UDP connection:", err)
 					return err
@@ -862,6 +808,7 @@ func populateTable(fileName string) {
 				createUdpConn(n)
 				for _, addr := range lnxConfig.RipNeighbors {
 					if addr == neighbor.DestAddr {
+						RipNeighborsMap[addr] = entry.IpAddr
 						entry.RipNeighbors = append(entry.RipNeighbors, n)
 						break
 					}

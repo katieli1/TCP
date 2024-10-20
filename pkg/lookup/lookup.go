@@ -188,7 +188,7 @@ func Callback_RIP(message string, source netip.Addr, dest netip.Addr, ttl int) {
 			if neighbor, found := entry.LookupTable[address]; found { // if we already know about the address
 				//poison reverse - split horizon
 				newCost := route.Cost + 1
-				if newCost > maxCost {
+				if newCost >= maxCost {
 					continue
 				}
 				if (neighbor.NextHop == nextHop) || neighbor.Cost > newCost { // update cost if necessary
@@ -446,7 +446,7 @@ func repl() { // manages command line interface
 
 						}
 
-						fmt.Println(t+iface.IpPrefix.String()+"   "+nextHop+"       ", neighbor.Cost-1)
+						fmt.Println(t+iface.IpPrefix.String()+"   "+nextHop+"        ", neighbor.Cost-1)
 					}
 				}
 			}
@@ -538,7 +538,6 @@ func readConn(iface *NetworkEntry, conn net.Conn) { // thread that continously r
 }
 
 func checkNeighbors() { // continously checks whether neighbors have timed out; if so, remove
-
 	for {
 		networkTableLock.Lock()
 		for i := range networkTable {
@@ -557,7 +556,6 @@ func checkNeighbors() { // continously checks whether neighbors have timed out; 
 
 		}
 		networkTableLock.Unlock()
-
 	}
 }
 
@@ -571,8 +569,12 @@ func removeNeighbor(ip netip.Addr) { // removes IP address from every NetworkEnt
 		}
 
 		neighbor, exists := networkTable[i].LookupTable[ip]
-
 		if exists {
+			neighbor.Cost = 16
+			for addrRip := range RipNeighborsMap {
+				sendRIPHelper(addrRip, false, []*Neighbor{neighbor})
+			}
+
 			if neighbor.UdpConn != nil {
 				neighbor.UdpConn.Close()
 			}

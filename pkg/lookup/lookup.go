@@ -70,12 +70,12 @@ const maxPacketSize = 1400
 var timeoutLimit time.Duration
 var ripUpdateRate time.Duration
 
-var maxCost = 16
+var maxCost = 16 // infinity
 
 func Initialize(fileName string) { // called on startup to populate table
 	populateTable(fileName)
 	networkTableLock.RLock()
-	for _, entry := range networkTable {
+	for _, entry := range networkTable { // for each interface
 
 		if !entry.IsDefault {
 			udpAddr, err := net.ResolveUDPAddr("udp4", entry.UdpAddrPort.String())
@@ -87,7 +87,7 @@ func Initialize(fileName string) { // called on startup to populate table
 				log.Panicln("Error setting up UDP listener: ", err)
 			}
 			for range entry.LookupTable {
-				go readConn(entry, udpConn)
+				go readConn(entry, udpConn) // continuously read from each interface's connection
 
 			}
 		}

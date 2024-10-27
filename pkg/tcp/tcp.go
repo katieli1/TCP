@@ -1,6 +1,7 @@
 package tcp
 
 import (
+	"github.com/google/netstack/tcpip/header"
 	"bufio"
 	"fmt"
 	"ip/pkg/iptcp_utils"
@@ -162,7 +163,6 @@ func Callback_TCP(msg string, source netip.Addr, dest netip.Addr, ttl int) {
 	// if found, go into the table, grab the channel that corresponds to the listener, send information
 
 }
-
 func VConnect(addr netip.Addr, port int16) (*pkgUtils.VTCPConn, error) {
 	// create random source port
 	rand.Seed(time.Now().UnixNano())
@@ -187,14 +187,33 @@ func VConnect(addr netip.Addr, port int16) (*pkgUtils.VTCPConn, error) {
 		return nil, err
 	}
 
-	fmt.Println("before send IP hooray")
-	header, err := lookup.CreateHeader(addr, sourceIp, len(bytes), 6, 64)
+	IPheader, err := lookup.CreateHeader(addr, sourceIp, len(bytes), 6, 64)
 	if err != nil {
 		fmt.Println("error creating IP header")
 	}
 
-	fmt.Println("source port: ", strconv.FormatInt(int64(c.SourcePort), 10))
-	lookup.SendIP(addr, 6, append(header, bytes...))
+
+	tcpHdr := header.TCPFields{
+		SrcPort:       uint16(randomPort),
+		DstPort:       uint16(port),
+		SeqNum:        1,
+		AckNum:        1,
+		DataOffset:    20,
+		Flags:         header.TCPFlagSyn | header.TCPFlagAck,
+		WindowSize:    65535,
+		Checksum:      0,
+		UrgentPointer: 0,
+	}
+
+	checksum := iptcp_utils.ComputeTCPChecksum(&tcpHdr, sourceIp, addr, bytes)
+	tcpHdr.Checksum = checksum
+
+	// Serialize the TCP header
+	tcpHeaderBytes := make(header.TCP, iptcp_utils.TcpHeaderLen)
+	tcpHeaderBytes.Encode(&tcpHdr)
+
+
+	lookup.SendIP(addr, 6, append(append(IPheader, tcpHeaderBytes...), bytes...))
 	connectionTable[*c] = TCPMetadata{
 		TCB:        make([]byte, bufsize),
 		isReceiver: false,

@@ -104,7 +104,9 @@ func Initialize(fileName string) { // called on startup to populate table
 
 	done := make(chan struct{})
 	go func() {
-		repl()
+		for {
+
+		}
 		close(done)
 	}()
 
@@ -247,12 +249,12 @@ func Callback_RIP(message string, source netip.Addr, dest netip.Addr, ttl int) {
 func sendRipRequest(dest netip.Addr, shouldLock bool) { // method that sends request to receive RIP data from neighbors
 	startOfMessage := fmt.Sprintf("%d,%d;", 1, 0)
 	messageBytes := []byte(startOfMessage + fmt.Sprintf("%d,%d,%d", 16, 10, pkgUtils.IpToUint32(RipNeighborsMap[dest])))
-	headerBytes, err := createHeader(dest, RipNeighborsMap[dest], len(messageBytes), 200, 64)
+	headerBytes, err := CreateHeader(dest, RipNeighborsMap[dest], len(messageBytes), 200, 64)
 	if err != nil {
 		return
 	}
 	packet := append(headerBytes, messageBytes...)
-	SendIP(dest, 200, packet, shouldLock)
+	sendIPHelper(dest, 200, packet, shouldLock)
 }
 
 // helper that sends RIP data about a list of neighbors to all RIP neighbors
@@ -316,16 +318,16 @@ func sendRIPHelper(dest netip.Addr, shouldLock bool, manualEntries []*Neighbor) 
 
 	messageBytes := []byte(fullMessage)
 
-	headerBytes, err := createHeader(dest, RipNeighborsMap[dest], len(message), 200, 64)
+	headerBytes, err := CreateHeader(dest, RipNeighborsMap[dest], len(message), 200, 64)
 	if err != nil {
 		return
 	}
 	packet := append(headerBytes, messageBytes...)
-	SendIP(dest, 200, packet, shouldLock)
+	sendIPHelper(dest, 200, packet, shouldLock)
 }
 
 // helper to create header for packets
-func createHeader(dest netip.Addr, src netip.Addr, length int, protocol int, TTL int) ([]byte, error) {
+func CreateHeader(dest netip.Addr, src netip.Addr, length int, protocol int, TTL int) ([]byte, error) {
 	header := &ipv4header.IPv4Header{
 		Version:  4,
 		Len:      20,
@@ -354,9 +356,9 @@ func createHeader(dest netip.Addr, src netip.Addr, length int, protocol int, TTL
 
 // function that registers callback functions; called by hosts and routers
 func RegisterRecvHandler(protocolNum uint8, callbackFunc HandlerFunc) error {
-	if protocolNum != 0 && protocolNum != 200 {
-		return errors.New("Invalid protocolNum")
-	}
+	// if protocolNum != 0 && protocolNum != 200 {
+	// 	return errors.New("Invalid protocolNum")
+	// }
 	handlerTable[protocolNum] = callbackFunc
 	return nil
 }
@@ -484,7 +486,7 @@ func repl() { // manages command line interface
 
 				payload := []byte(words[2])
 				packet := append(headerBytes, payload...)
-				SendIP(dest, 0, packet, true)
+				sendIPHelper(dest, 0, packet, true)
 			}
 
 		} else {
@@ -514,6 +516,7 @@ func changeInterfaceState(up bool, words []string) {
 }
 
 func readConn(iface *NetworkEntry, conn net.Conn) { // thread that continously reads from a connection for an interface
+	fmt.Println("in read conn")
 
 	for {
 
@@ -521,7 +524,7 @@ func readConn(iface *NetworkEntry, conn net.Conn) { // thread that continously r
 			buf := make([]byte, maxPacketSize)
 
 			_, err := conn.Read(buf)
-
+			fmt.Println("after read")
 			if err != nil {
 				fmt.Println("Error reading from connection")
 			}
@@ -532,7 +535,7 @@ func readConn(iface *NetworkEntry, conn net.Conn) { // thread that continously r
 				continue
 			}
 
-			SendIP(header.Dst, uint8(header.Protocol), buf, true) // process data
+			sendIPHelper(header.Dst, uint8(header.Protocol), buf, true) // process data
 		}
 	}
 }
@@ -606,9 +609,15 @@ func createUdpConn(neighbor *Neighbor) {
 	neighbor.UdpConn = conn
 }
 
+func SendIP(dest netip.Addr, protocolNum uint8, packet []byte) error {
+	fmt.Println("send ip start")
+	return sendIPHelper(dest, protocolNum, packet, true)
+}
+
 // function that checks whether TTL/checksum are valid, whether this packet is for me (if so, invoke callback)
 // and then sends to next hop if the packet is not for me
-func SendIP(dest netip.Addr, protocolNum uint8, packet []byte, shouldLock bool) error {
+func sendIPHelper(dest netip.Addr, protocolNum uint8, packet []byte, shouldLock bool) error {
+	fmt.Println("send ip helper start")
 	header, err := ipv4header.ParseHeader(packet[:ipv4header.HeaderLen])
 
 	// determine which interface to send out of to set source IP address
@@ -627,12 +636,14 @@ func SendIP(dest netip.Addr, protocolNum uint8, packet []byte, shouldLock bool) 
 		}
 
 	}
+	fmt.Println("after src looping")
 
 	if err != nil {
 		return fmt.Errorf("error parsing header: %w", err)
 	}
-
+	fmt.Println("before ttl check")
 	if header.TTL == 0 { // drop if TTL expired
+		fmt.Println("TTL is invalid")
 		return errors.New("TTL expired")
 	}
 
@@ -642,22 +653,25 @@ func SendIP(dest netip.Addr, protocolNum uint8, packet []byte, shouldLock bool) 
 	computedChecksum := ValidateChecksum(headerBytes, checksumFromHeader)
 
 	// drop if checksum is bad
+	fmt.Println("before checksum check")
 	if computedChecksum != checksumFromHeader {
 		return errors.New("checksum is bad")
 	}
 
 	message := packet[headerSize:]
-
+	fmt.Println("before locking")
 	var bestMatch netip.Prefix
 	if shouldLock {
 		networkTableLock.RLock()
 	}
+	fmt.Println("after locking")
 
 	for prefix := range networkTable { // find best-match prefix
 		addr := networkTable[prefix].IpAddr
 		if addr == header.Dst && networkTable[prefix].Name != "" { // if this packet is for me
-
+			fmt.Println("addr == header.Dst")
 			if callback, found := handlerTable[protocolNum]; found {
+				fmt.Println("found callback")
 				callback(string(message), header.Src, header.Dst, header.TTL) // invoke callback function (updates table for RIP, prints for test packets)
 				if shouldLock {
 					networkTableLock.RUnlock()
@@ -672,7 +686,7 @@ func SendIP(dest netip.Addr, protocolNum uint8, packet []byte, shouldLock bool) 
 	if shouldLock {
 		networkTableLock.RUnlock()
 	}
-
+	fmt.Println("before best match valid")
 	if bestMatch.IsValid() { // if best match was found
 
 		e := networkTable[bestMatch]
@@ -683,26 +697,28 @@ func SendIP(dest netip.Addr, protocolNum uint8, packet []byte, shouldLock bool) 
 			}
 
 			if e.IsDefault { // if it's going through a default static route
-				return SendIP(e.Default, protocolNum, packet, shouldLock) // resend through static route
+				return sendIPHelper(e.Default, protocolNum, packet, shouldLock) // resend through static route
 			}
-
+			fmt.Println("before if check")
 			if neighbor, exists := e.LookupTable[dest]; exists {
+				fmt.Println("after if check")
 				//count to infinity
 				if neighbor.Cost >= maxCost {
 					return nil
 				}
 
 				if neighbor.WillHop { // if the next destination is not the final destination
-					return SendIP(e.IpAddr, protocolNum, packet, shouldLock) // send to next destination
+					return sendIPHelper(e.IpAddr, protocolNum, packet, shouldLock) // send to next destination
 				}
 
 				// construct header and write to correct UDP connection
-				headerBytes, err := createHeader(header.Dst, header.Src, len(message), header.Protocol, header.TTL-1)
+				headerBytes, err := CreateHeader(header.Dst, header.Src, len(message), header.Protocol, header.TTL-1)
 				if err != nil {
 					return err
 				}
 
 				totalMessage := append(headerBytes, message...)
+				fmt.Println("send ip before writing")
 				_, err2 := neighbor.UdpConn.Write(totalMessage)
 				if err2 != nil {
 					return err2
@@ -809,4 +825,14 @@ func ComputeChecksum(b []byte) uint16 {
 func getMaskedPrefix(prefix netip.Prefix) netip.Prefix { //helper to mask prefixes so that they're consistent keys in networkTable
 	networkAddr := prefix.Masked().Addr()
 	return netip.PrefixFrom(networkAddr, prefix.Bits())
+}
+
+func GetHostIp() (netip.Addr, error) {
+	for _, n := range networkTable {
+		if !n.IsDefault {
+			return n.IpAddr, nil
+		}
+	}
+
+	return netip.Addr{}, errors.New("ip not found :(")
 }

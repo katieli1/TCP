@@ -40,7 +40,7 @@ type RouteInfo struct {
 }
 
 type Neighbor struct { // represents any interface that's reachable by this router/host (not necessarily immediate neighbor)
-	UdpConn       net.Conn
+	UdpConn       *net.UDPConn
 	DestAddr      netip.Addr
 	UdpAddrPort   netip.AddrPort
 	IpPrefix      netip.Prefix
@@ -83,6 +83,9 @@ func Initialize(fileName string) { // called on startup to populate table
 				log.Panicln("Error resolving UDP address: ", err)
 			}
 			udpConn, err := net.ListenUDP("udp4", udpAddr)
+			for _, neighbor := range entry.LookupTable {
+				neighbor.UdpConn = udpConn
+			}
 			if err != nil {
 				log.Panicln("Error setting up UDP listener: ", err)
 			}
@@ -593,15 +596,16 @@ func removeNeighbor(ip netip.Addr) { // removes IP address from every NetworkEnt
 
 }
 
-func createUdpConn(neighbor *Neighbor) {
-	addrPort := neighbor.UdpAddrPort
-	udpAddr := &net.UDPAddr{
-		IP:   addrPort.Addr().AsSlice(),
-		Port: int(addrPort.Port()),
-	}
+func createUdpConn(neighbor *Neighbor, srcAddr *net.UDPAddr) {
+	// addrPort := neighbor.UdpAddrPort
+	// localhostIPv4 := net.ParseIP("127.0.0.1")
+	// udpAddr := &net.UDPAddr{
+	// 	IP:   localhostIPv4,
+	// 	Port: int(addrPort.Port()),
+	// }
 
 	// Create a UDP connection (for sending)
-	conn, err := net.DialUDP("udp", nil, udpAddr)
+	conn, err := net.ListenUDP("udp", srcAddr)
 	if err != nil {
 		fmt.Println("Error dialing UDP connection:", err)
 		return
@@ -719,7 +723,13 @@ func sendIPHelper(dest netip.Addr, protocolNum uint8, packet []byte, shouldLock 
 
 				totalMessage := append(headerBytes, message...)
 				fmt.Println("send ip before writing")
-				_, err2 := neighbor.UdpConn.Write(totalMessage)
+
+				udpAddr := &net.UDPAddr{
+					IP:   net.ParseIP("127.0.0.1"),
+					Port: int(neighbor.UdpAddrPort.Port()),
+				}
+
+				_, err2 := neighbor.UdpConn.WriteToUDP(totalMessage, udpAddr)
 				if err2 != nil {
 					return err2
 				}
@@ -766,6 +776,7 @@ func populateTable(fileName string) {
 	for _, neighbor := range lnxConfig.Neighbors { //populate neighbors
 		for _, entry := range networkTable {
 			if entry.Name == neighbor.InterfaceName {
+				fmt.Println("in if statement")
 				maskedPrefix := getMaskedPrefix(entry.IpPrefix)
 				n := &Neighbor{
 					DestAddr:      neighbor.DestAddr,
@@ -777,7 +788,15 @@ func populateTable(fileName string) {
 					WillHop:       false,
 				}
 				entry.LookupTable[neighbor.DestAddr] = n
-				createUdpConn(n) //create UDP connection to immediate neighbors
+
+				// port := entry.UdpAddrPort.Port()
+
+				// udpAddr := &net.UDPAddr{
+				// 	IP:   net.ParseIP("127.0.0.1"),
+				// 	Port: int(port),
+				// }
+
+				//createUdpConn(n, udpAddr) //create UDP connection to immediate neighbors
 				for _, addr := range lnxConfig.RipNeighbors {
 					if addr == neighbor.DestAddr {
 						RipNeighborsMap[addr] = entry.IpAddr

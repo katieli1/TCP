@@ -519,7 +519,6 @@ func changeInterfaceState(up bool, words []string) {
 }
 
 func readConn(iface *NetworkEntry, conn net.Conn) { // thread that continously reads from a connection for an interface
-	fmt.Println("in read conn")
 
 	for {
 
@@ -614,14 +613,12 @@ func createUdpConn(neighbor *Neighbor, srcAddr *net.UDPAddr) {
 }
 
 func SendIP(dest netip.Addr, protocolNum uint8, packet []byte) error {
-	fmt.Println("send ip start")
 	return sendIPHelper(dest, protocolNum, packet, true)
 }
 
 // function that checks whether TTL/checksum are valid, whether this packet is for me (if so, invoke callback)
 // and then sends to next hop if the packet is not for me
 func sendIPHelper(dest netip.Addr, protocolNum uint8, packet []byte, shouldLock bool) error {
-	fmt.Println("send ip helper start")
 	header, err := ipv4header.ParseHeader(packet[:ipv4header.HeaderLen])
 
 	// determine which interface to send out of to set source IP address
@@ -640,12 +637,10 @@ func sendIPHelper(dest netip.Addr, protocolNum uint8, packet []byte, shouldLock 
 		}
 
 	}
-	fmt.Println("after src looping")
 
 	if err != nil {
 		return fmt.Errorf("error parsing header: %w", err)
 	}
-	fmt.Println("before ttl check")
 	if header.TTL == 0 { // drop if TTL expired
 		fmt.Println("TTL is invalid")
 		return errors.New("TTL expired")
@@ -657,25 +652,20 @@ func sendIPHelper(dest netip.Addr, protocolNum uint8, packet []byte, shouldLock 
 	computedChecksum := ValidateChecksum(headerBytes, checksumFromHeader)
 
 	// drop if checksum is bad
-	fmt.Println("before checksum check")
 	if computedChecksum != checksumFromHeader {
 		return errors.New("checksum is bad")
 	}
 
 	message := packet[headerSize:]
-	fmt.Println("before locking")
 	var bestMatch netip.Prefix
 	if shouldLock {
 		networkTableLock.RLock()
 	}
-	fmt.Println("after locking")
 
 	for prefix := range networkTable { // find best-match prefix
 		addr := networkTable[prefix].IpAddr
 		if addr == header.Dst && networkTable[prefix].Name != "" { // if this packet is for me
-			fmt.Println("addr == header.Dst")
 			if callback, found := handlerTable[protocolNum]; found {
-				fmt.Println("found callback")
 				callback(string(message), header.Src, header.Dst, header.TTL) // invoke callback function (updates table for RIP, prints for test packets)
 				if shouldLock {
 					networkTableLock.RUnlock()
@@ -690,7 +680,6 @@ func sendIPHelper(dest netip.Addr, protocolNum uint8, packet []byte, shouldLock 
 	if shouldLock {
 		networkTableLock.RUnlock()
 	}
-	fmt.Println("before best match valid")
 	if bestMatch.IsValid() { // if best match was found
 
 		e := networkTable[bestMatch]
@@ -703,9 +692,7 @@ func sendIPHelper(dest netip.Addr, protocolNum uint8, packet []byte, shouldLock 
 			if e.IsDefault { // if it's going through a default static route
 				return sendIPHelper(e.Default, protocolNum, packet, shouldLock) // resend through static route
 			}
-			fmt.Println("before if check")
 			if neighbor, exists := e.LookupTable[dest]; exists {
-				fmt.Println("after if check")
 				//count to infinity
 				if neighbor.Cost >= maxCost {
 					return nil
@@ -722,7 +709,6 @@ func sendIPHelper(dest netip.Addr, protocolNum uint8, packet []byte, shouldLock 
 				}
 
 				totalMessage := append(headerBytes, message...)
-				fmt.Println("send ip before writing")
 
 				udpAddr := &net.UDPAddr{
 					IP:   net.ParseIP("127.0.0.1"),
@@ -776,7 +762,6 @@ func populateTable(fileName string) {
 	for _, neighbor := range lnxConfig.Neighbors { //populate neighbors
 		for _, entry := range networkTable {
 			if entry.Name == neighbor.InterfaceName {
-				fmt.Println("in if statement")
 				maskedPrefix := getMaskedPrefix(entry.IpPrefix)
 				n := &Neighbor{
 					DestAddr:      neighbor.DestAddr,

@@ -24,7 +24,7 @@ type TCPMetadata struct {
 }
 type VListener struct {
 	Port int16
-	Chan chan (bool)
+	Chan chan (*pkgUtils.VTCPConn)
 }
 
 var connectionTable = make(map[pkgUtils.VTCPConn]TCPMetadata)
@@ -89,6 +89,10 @@ func repl() {
 			for port := range listenerTable {
 				fmt.Println("Port: ", strconv.FormatInt(int64(port), 10))
 			}
+			for conn := range connectionTable {
+				fmt.Println("Source Port: ", strconv.FormatInt(int64(conn.SourcePort), 10))
+				fmt.Println("Destination Port: ", strconv.FormatInt(int64(conn.DestPort), 10))
+			}
 
 		} else if words[0] == "sf" {
 
@@ -103,7 +107,7 @@ func repl() {
 }
 
 func VListen(port int16) *VListener {
-	return &VListener{Port: port, Chan: make(chan bool)}
+	return &VListener{Port: port, Chan: make(chan *pkgUtils.VTCPConn)}
 }
 
 func ACommand(port int16) {
@@ -111,13 +115,52 @@ func ACommand(port int16) {
 	listenerTable[port] = listenConn
 
 	for {
-		<-listenConn.Chan
+		fourTuple, ok:= <-listenConn.Chan
+		if !ok {
+			fmt.Println("failed")
+		}
 		fmt.Println("send accept now")
-		//clientConn, err := listenConn.VAccept()
+		clientConn, err := listenConn.VAccept(*fourTuple)
+				fmt.Println("send accept now",clientConn,err)
 	}
 }
 
-func (*VListener) VAccept() (*pkgUtils.VTCPConn, error) {
+func (*VListener) VAccept(fourTuple pkgUtils.VTCPConn) (*pkgUtils.VTCPConn, error) {
+	connectionTable[fourTuple] = TCPMetadata{
+		isReceiver: false,
+		LastSeen:   0,
+		Next:       0,
+		Head:       0,
+	}
+
+	//sending ACK
+	bytes := []
+	IPheader, err := lookup.CreateHeader(addr, sourceIp, len(bytes), 6, 64)
+	if err != nil {
+		fmt.Println("error creating IP header")
+	}
+
+
+	tcpHdr := header.TCPFields{
+		SrcPort:       uint16(randomPort),
+		DstPort:       uint16(port),
+		SeqNum:        1,
+		AckNum:        1,
+		DataOffset:    20,
+		Flags:         header.TCPFlagSyn | header.TCPFlagAck,
+		WindowSize:    65535,
+		Checksum:      0,
+		UrgentPointer: 0,
+	}
+
+	checksum := iptcp_utils.ComputeTCPChecksum(&tcpHdr, sourceIp, addr, bytes)
+	tcpHdr.Checksum = checksum
+
+	// Serialize the TCP header
+	tcpHeaderBytes := make(header.TCP, iptcp_utils.TcpHeaderLen)
+	tcpHeaderBytes.Encode(&tcpHdr)
+
+	lookup.SendIP(addr, 6, append(append(IPheader, tcpHeaderBytes...), bytes...))
 	return nil, nil
 }
 
@@ -131,35 +174,43 @@ func Callback_TCP(msg string, source netip.Addr, dest netip.Addr, ttl int) {
 	tcpHdr := iptcp_utils.ParseTCPHeader(tcpHeaderAndData)
 
 	// Get the payload
-	// tcpPayload := tcpHeaderAndData[tcpHdr.DataOffset:]
+	tcpPayload := tcpHeaderAndData[tcpHdr.DataOffset:]
 
-	// Now that we have all the pieces, we can verify the TCP checksum
-	// In general, the checksum function expects the checksum field to be
-	// set to 0, which allows us to verify it by checking against the
-	// value sent in the header.
-	// An alternative is to *not* clear this value and then compare
-	// tcpComputedChecksum == 0 (for details, see EdStem #208)
-	// tcpChecksumFromHeader := tcpHdr.Checksum // Save original
-	// tcpHdr.Checksum = 0
-	// tcpComputedChecksum := iptcp_utils.ComputeTCPChecksum(&tcpHdr, source, dest, tcpPayload)
+	tcpChecksumFromHeader := tcpHdr.Checksum // Save original
+	tcpHdr.Checksum = 0
+	fmt.Println("source: ", source.String())
+	fmt.Println("dest: ", dest.String())
 
-	// if tcpComputedChecksum != tcpChecksumFromHeader {
-	// 	fmt.Println("Error: bad checksum :(")
-	// }
+	tcpComputedChecksum := iptcp_utils.ComputeTCPChecksum(&tcpHdr, source, dest, tcpPayload)
+
+	if tcpComputedChecksum != tcpChecksumFromHeader {
+		fmt.Println("Error: bad checksum :(")
+	}
+
+	fourTuple := &pkgUtils.VTCPConn{}
+	err := fourTuple.Unmarshal(tcpPayload)
+	if err != nil {
+		fmt.Println("error unmarshalling")
+	}
 
 	// if ALREADY EXISTS, we are not receiving a VConnect. we should update the buffer in connection table
 
+	entryValue := connectionTable[fourTuple]
+	if entryValue != nil {
+		//handle this in milestone 2
+		return
+	}
+
+	
 	// IF DOES NOT EXIST:
 	// look at the table for the 4-tuple that it's receiving
 	port := tcpHdr.DstPort
 	fmt.Println("Port to check: " + strconv.FormatInt(int64(port), 10))
 	listenConn, exists := listenerTable[int16(port)]
-	fmt.Println("before exists check")
 	if exists {
 		fmt.Println("exists")
-		listenConn.Chan <- true
+		listenConn.Chan <- fourTuple
 	}
-	fmt.Println("bye bye callback")
 	// if found, go into the table, grab the channel that corresponds to the listener, send information
 
 }

@@ -5,13 +5,14 @@ import (
 	"bufio"
 	"fmt"
 	"ip/pkg/iptcp_utils"
+	state "ip/pkg/tcp_states"
 	"ip/pkg/lookup"
 	"ip/pkg/pkgUtils"
-	"math/rand"
 	"net/netip"
 	"os"
 	"strconv"
 	"strings"
+	"math/rand"
 	"time"
 )
 
@@ -21,13 +22,14 @@ type TCPMetadata struct {
 	LastSeen   int16
 	Next       int16
 	Head       int16
+	State	   state.TCPState
 }
 type VListener struct {
 	Port int16
 	Chan chan (*pkgUtils.VTCPConn)
 }
 
-var connectionTable = make(map[pkgUtils.VTCPConn]TCPMetadata)
+var connectionTable = make(map[pkgUtils.VTCPConn]*TCPMetadata)
 var listenerTable = make(map[int16]*VListener)
 var bufsize = 1024
 var sid = 0
@@ -85,15 +87,28 @@ func repl() {
 		} else if words[0] == "cl" { // close
 
 		} else if words[0] == "ls" {
-			fmt.Println("SID       LAddr       LPort       RAddr       RPort       Status")
+			fmt.Printf("%-10s %-15s %-10s %-15s %-10s %-10s\n", "SID", "LAddr", "LPort", "RAddr", "RPort", "Status")
+
+			// Loop through listenerTable entries and print details
 			for port := range listenerTable {
-				fmt.Println("Port: ", strconv.FormatInt(int64(port), 10))
-			}
-			for conn := range connectionTable {
-				fmt.Println("Source Port: ", strconv.FormatInt(int64(conn.SourcePort), 10))
-				fmt.Println("Destination Port: ", strconv.FormatInt(int64(conn.DestPort), 10))
+				fmt.Printf("%-10s %-15s %-10s %-15s %-10s %-10s\n", 
+					"-",          // SID (could add an ID if available)
+					"0.0.0.0",    // Placeholder for LAddr (replace if available)
+					strconv.Itoa(int(port)),
+					"0.0.0.0",          // RAddr (not applicable for listeners)
+					"0",          // RPort (not applicable for listeners)
+					"LISTEN")
 			}
 
+			for conn := range connectionTable {
+				fmt.Printf("%-10s %-15s %-10s %-15s %-10s %-10s\n", 
+					"-",                                              // SID (could add an ID if available)
+					conn.SourceIp.String(),                           // LAddr
+					strconv.Itoa(int(conn.SourcePort)),               // LPort
+					conn.DestIp.String(),                             // RAddr
+					strconv.Itoa(int(conn.DestPort)),                 // RPort
+					connectionTable[conn].State)                                    // Status (example status, could change if needed)
+			}
 		} else if words[0] == "sf" {
 
 		} else if words[0] == "rf" {
@@ -126,43 +141,27 @@ func ACommand(port int16) {
 }
 
 func (*VListener) VAccept(fourTuple pkgUtils.VTCPConn) (*pkgUtils.VTCPConn, error) {
-	connectionTable[fourTuple] = TCPMetadata{
-		isReceiver: false,
+	connectionTable[fourTuple] = &TCPMetadata{
+		isReceiver: true,
 		LastSeen:   0,
 		Next:       0,
 		Head:       0,
+		State: state.SYN_RECEIVED,
 	}
 
-	//sending ACK
-	bytes := []
-	IPheader, err := lookup.CreateHeader(addr, sourceIp, len(bytes), 6, 64)
+	bytes, err := pkgUtils.Marshal(fourTuple)
 	if err != nil {
-		fmt.Println("error creating IP header")
+		return nil, err
 	}
 
-
-	tcpHdr := header.TCPFields{
-		SrcPort:       uint16(randomPort),
-		DstPort:       uint16(port),
-		SeqNum:        1,
-		AckNum:        1,
-		DataOffset:    20,
-		Flags:         header.TCPFlagSyn | header.TCPFlagAck,
-		WindowSize:    65535,
-		Checksum:      0,
-		UrgentPointer: 0,
+	err = sendTCPPacket(fourTuple.SourceIp, fourTuple.DestIp, fourTuple.SourcePort, fourTuple.DestPort, header.TCPFlagSyn|header.TCPFlagAck, bytes)
+	if err != nil {
+		return nil, err
 	}
 
-	checksum := iptcp_utils.ComputeTCPChecksum(&tcpHdr, sourceIp, addr, bytes)
-	tcpHdr.Checksum = checksum
-
-	// Serialize the TCP header
-	tcpHeaderBytes := make(header.TCP, iptcp_utils.TcpHeaderLen)
-	tcpHeaderBytes.Encode(&tcpHdr)
-
-	lookup.SendIP(addr, 6, append(append(IPheader, tcpHeaderBytes...), bytes...))
 	return nil, nil
 }
+
 
 func Callback_TCP(msg string, source netip.Addr, dest netip.Addr, ttl int) {
 	fmt.Println("callback tcp")
@@ -193,11 +192,40 @@ func Callback_TCP(msg string, source netip.Addr, dest netip.Addr, ttl int) {
 		fmt.Println("error unmarshalling")
 	}
 
+	c := &pkgUtils.VTCPConn{ // set source addr by using getter
+		SourceIp:   fourTuple.DestIp,
+		SourcePort: fourTuple.DestPort,
+		DestIp:     fourTuple.SourceIp,
+		DestPort:   fourTuple.SourcePort,
+	}
+
 	// if ALREADY EXISTS, we are not receiving a VConnect. we should update the buffer in connection table
 
-	entryValue := connectionTable[fourTuple]
-	if entryValue != nil {
+	connection,exists := connectionTable[*c]
+	if exists {
+		if connection.State == state.SYN_RECEIVED {
+			connection.State = state.ESTABLISHED
+			fmt.Println("Got here! ",state.SYN_RECEIVED )
+			return
+		}
+		if connection.State == state.SYN_SENT {
+			connection.State = state.ESTABLISHED
+			fmt.Println("Got here! ", state.SYN_SENT)
+			bytes, err := pkgUtils.Marshal(*c)
+			if err != nil {
+				fmt.Println("Err")
+				return
+			}
+
+			err = sendTCPPacket(c.SourceIp, c.DestIp, c.SourcePort, c.DestPort, header.TCPFlagSyn|header.TCPFlagAck, bytes)
+			if err != nil {
+				fmt.Println("Err")
+				return
+			}
+			return
+		}
 		//handle this in milestone 2
+		fmt.Println("Got here!")
 		return
 	}
 
@@ -209,24 +237,19 @@ func Callback_TCP(msg string, source netip.Addr, dest netip.Addr, ttl int) {
 	listenConn, exists := listenerTable[int16(port)]
 	if exists {
 		fmt.Println("exists")
-		listenConn.Chan <- fourTuple
+		listenConn.Chan <- c
 	}
 	// if found, go into the table, grab the channel that corresponds to the listener, send information
 
 }
 func VConnect(addr netip.Addr, port int16) (*pkgUtils.VTCPConn, error) {
-	// create random source port
-	rand.Seed(time.Now().UnixNano())
-	min := 1024
-	max := 65535
-
-	randomPort := rand.Intn(max-min+1) + min // TODO: make sure not already in use
-
+	randomPort := GenerateUniquePort(addr, connectionTable)
 	sourceIp, err := lookup.GetHostIp()
 	if err != nil {
 		return nil, err
 	}
-	c := &pkgUtils.VTCPConn{ // set source addr by using getter
+	
+	c := &pkgUtils.VTCPConn{
 		SourceIp:   sourceIp,
 		SourcePort: int16(randomPort),
 		DestIp:     addr,
@@ -238,39 +261,79 @@ func VConnect(addr netip.Addr, port int16) (*pkgUtils.VTCPConn, error) {
 		return nil, err
 	}
 
-	IPheader, err := lookup.CreateHeader(addr, sourceIp, len(bytes), 6, 64)
+	err = sendTCPPacket(sourceIp, addr, int16(randomPort), port, header.TCPFlagSyn, bytes)
 	if err != nil {
-		fmt.Println("error creating IP header")
+		return nil, err
 	}
 
-
-	tcpHdr := header.TCPFields{
-		SrcPort:       uint16(randomPort),
-		DstPort:       uint16(port),
-		SeqNum:        1,
-		AckNum:        1,
-		DataOffset:    20,
-		Flags:         header.TCPFlagSyn | header.TCPFlagAck,
-		WindowSize:    65535,
-		Checksum:      0,
-		UrgentPointer: 0,
-	}
-
-	checksum := iptcp_utils.ComputeTCPChecksum(&tcpHdr, sourceIp, addr, bytes)
-	tcpHdr.Checksum = checksum
-
-	// Serialize the TCP header
-	tcpHeaderBytes := make(header.TCP, iptcp_utils.TcpHeaderLen)
-	tcpHeaderBytes.Encode(&tcpHdr)
-
-
-	lookup.SendIP(addr, 6, append(append(IPheader, tcpHeaderBytes...), bytes...))
-	connectionTable[*c] = TCPMetadata{
+	connectionTable[*c] = &TCPMetadata{
 		TCB:        make([]byte, bufsize),
 		isReceiver: false,
 		LastSeen:   0,
 		Next:       0,
 		Head:       0,
+		State: state.SYN_SENT,
 	}
+
 	return c, nil
+}
+
+
+func sendTCPPacket(srcIp, destIp netip.Addr, srcPort, destPort int16, flags uint8, data []byte) error {
+	tcpHdr := header.TCPFields{
+		SrcPort:       uint16(srcPort),
+		DstPort:       uint16(destPort),
+		SeqNum:        1,
+		AckNum:        1,
+		DataOffset:    20,
+		Flags:         flags,
+		WindowSize:    65535,
+		Checksum:      0,
+		UrgentPointer: 0,
+	}
+
+	checksum := iptcp_utils.ComputeTCPChecksum(&tcpHdr, srcIp, destIp, data)
+	tcpHdr.Checksum = checksum
+
+	tcpHeaderBytes := make(header.TCP, iptcp_utils.TcpHeaderLen)
+	tcpHeaderBytes.Encode(&tcpHdr)
+
+	packetBytes := append(tcpHeaderBytes, data...)
+
+	IPheader, err := lookup.CreateHeader(destIp, srcIp, len(packetBytes), 6, 64)
+	if err != nil {
+		return fmt.Errorf("error creating IP header: %w", err)
+	}
+
+	if err := lookup.SendIP(destIp, 6, append(IPheader, packetBytes...)); err != nil {
+		return fmt.Errorf("error sending IP packet: %w", err)
+	}
+
+	return nil
+}
+
+
+func GenerateUniquePort(addr netip.Addr, connectionTable map[pkgUtils.VTCPConn]*TCPMetadata) int16 {
+	rand.Seed(time.Now().UnixNano())
+	min := 1024
+	max := 9998
+
+	var randomPort int
+	for {
+		randomPort = rand.Intn(max-min+1) + min
+		
+		isPortInUse := false
+		for conn := range connectionTable {
+			if conn.SourceIp == addr && conn.SourcePort == int16(randomPort) {
+				isPortInUse = true
+				break
+			}
+		}
+
+		if !isPortInUse {
+			break
+		}
+	}
+
+	return int16(randomPort)
 }

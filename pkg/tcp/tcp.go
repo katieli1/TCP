@@ -154,7 +154,7 @@ func (*VListener) VAccept(fourTuple pkgUtils.VTCPConn) (*pkgUtils.VTCPConn, erro
 		return nil, err
 	}
 
-	err = sendTCPPacket(fourTuple.SourceIp, fourTuple.DestIp, fourTuple.SourcePort, fourTuple.DestPort, header.TCPFlagSyn|header.TCPFlagAck, bytes)
+	err = sendTCPPacket(fourTuple.SourceIp, fourTuple.DestIp, fourTuple.SourcePort, fourTuple.DestPort,1,1, header.TCPFlagSyn|header.TCPFlagAck, bytes)
 	if err != nil {
 		return nil, err
 	}
@@ -205,7 +205,7 @@ func Callback_TCP(msg string, source netip.Addr, dest netip.Addr, ttl int) {
 	if exists {
 		if connection.State == state.SYN_RECEIVED {
 			connection.State = state.ESTABLISHED
-			fmt.Println("Got here! ",state.SYN_RECEIVED )
+			fmt.Println("Got here! ",state.SYN_RECEIVED)
 			return
 		}
 		if connection.State == state.SYN_SENT {
@@ -217,7 +217,7 @@ func Callback_TCP(msg string, source netip.Addr, dest netip.Addr, ttl int) {
 				return
 			}
 
-			err = sendTCPPacket(c.SourceIp, c.DestIp, c.SourcePort, c.DestPort, header.TCPFlagSyn|header.TCPFlagAck, bytes)
+			err = sendTCPPacket(c.SourceIp, c.DestIp, c.SourcePort, c.DestPort,0,tcpHdr.SeqNum+1, header.TCPFlagAck, bytes)
 			if err != nil {
 				fmt.Println("Err")
 				return
@@ -261,7 +261,7 @@ func VConnect(addr netip.Addr, port int16) (*pkgUtils.VTCPConn, error) {
 		return nil, err
 	}
 
-	err = sendTCPPacket(sourceIp, addr, int16(randomPort), port, header.TCPFlagSyn, bytes)
+	err = sendTCPPacket(sourceIp, addr, int16(randomPort), port,1,0, header.TCPFlagSyn, bytes)
 	if err != nil {
 		return nil, err
 	}
@@ -279,12 +279,12 @@ func VConnect(addr netip.Addr, port int16) (*pkgUtils.VTCPConn, error) {
 }
 
 
-func sendTCPPacket(srcIp, destIp netip.Addr, srcPort, destPort int16, flags uint8, data []byte) error {
+func sendTCPPacket(srcIp, destIp netip.Addr, srcPort, destPort, Syn, Ack int16, flags uint8, data []byte) error {
 	tcpHdr := header.TCPFields{
 		SrcPort:       uint16(srcPort),
 		DstPort:       uint16(destPort),
-		SeqNum:        1,
-		AckNum:        1,
+		SeqNum:        Syn,
+		AckNum:        Ack,
 		DataOffset:    20,
 		Flags:         flags,
 		WindowSize:    65535,

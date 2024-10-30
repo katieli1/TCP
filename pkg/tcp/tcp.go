@@ -220,17 +220,11 @@ func Callback_TCP(msg []byte, source netip.Addr, dest netip.Addr, ttl int) {
 		fmt.Println("Error: bad checksum :(")
 	}
 
-	fourTuple := &pkgUtils.VTCPConn{}
-	err := fourTuple.Unmarshal(tcpPayload[:38])
-	if err != nil {
-		fmt.Println("error unmarshalling")
-	}
-
 	c := &pkgUtils.VTCPConn{
-		SourceIp:   fourTuple.DestIp,
-		SourcePort: fourTuple.DestPort,
-		DestIp:     fourTuple.SourceIp,
-		DestPort:   fourTuple.SourcePort,
+		SourceIp:   dest,
+		SourcePort: int16(tcpHdr.DstPort),
+		DestIp:     source,
+		DestPort:   int16(tcpHdr.SrcPort),
 	}
 
 	// if ALREADY EXISTS, we are not receiving a VConnect. we should update the buffer in connection table
@@ -258,7 +252,7 @@ func Callback_TCP(msg []byte, source netip.Addr, dest netip.Addr, ttl int) {
 		}
 		//handle this in milestone 2
 		connection.LastSeen = int16(tcpHdr.AckNum)
-		connection.TCB = append(connection.TCB, tcpPayload[38:]...)
+		connection.TCB = append(connection.TCB, tcpPayload...)
 		return
 	}
 
@@ -285,12 +279,7 @@ func VConnect(addr netip.Addr, port int16) (*pkgUtils.VTCPConn, error) {
 		DestPort:   port,
 	}
 
-	bytes, err := pkgUtils.Marshal(*c)
-	if err != nil {
-		return nil, err
-	}
-
-	err = sendTCPPacket(sourceIp, addr, int16(randomPort), port,1,0, header.TCPFlagSyn, bytes)
+	err = sendTCPPacket(sourceIp, addr, int16(randomPort), port,1,0, header.TCPFlagSyn, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -316,8 +305,6 @@ func VSend(entry int16, message string) error {
 		return fmt.Errorf("cannot send message: listener entry")
 	}
 
-	bytes, err := pkgUtils.Marshal(*orderStruct.VConn)
-
 	bufferStruct := connectionTable[*orderStruct.VConn]
 
 	bytesMessage := []byte(message)
@@ -325,9 +312,7 @@ func VSend(entry int16, message string) error {
 	seqNum := bufferStruct.Next 
 	ackNum := bufferStruct.LastSeen 
 
-	totalBytes := append(bytes,bytesMessage...)
-
-	err = sendTCPPacket(
+	err := sendTCPPacket(
 		orderStruct.VConn.SourceIp,
 		orderStruct.VConn.DestIp,
 		orderStruct.VConn.SourcePort,
@@ -335,7 +320,7 @@ func VSend(entry int16, message string) error {
 		seqNum,
 		ackNum,
 		header.TCPFlagSyn|header.TCPFlagAck,
-		totalBytes,
+		bytesMessage,
 	)
 
 	if err != nil {

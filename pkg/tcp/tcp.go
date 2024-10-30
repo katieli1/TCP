@@ -89,33 +89,42 @@ func repl() {
 			VConnect(ip, int16(port))
 
 		} else if words[0] == "s" { // send data using a socket
+			if len(words) < 3 {
+				fmt.Println("Usage: s <port> <message>")
+				continue
+			}
+			entry, err := strconv.ParseInt(words[1], 10, 16)
+			if err != nil {
+				fmt.Printf("Invalid entry: %s\n", words[1])
+				continue
+			}
 
+			message := strings.Join(words[2:], " ")
+
+			VSend(int16(entry), message)
 		} else if words[0] == "cl" { // close
 
 		} else if words[0] == "ls" {
 			fmt.Printf("%-10s %-15s %-10s %-15s %-10s %-10s\n", "SID", "LAddr", "LPort", "RAddr", "RPort", "Status")
-
 			for index, v := range fourtupleOrder {
 				if v.VConn != nil {
-				// If the VConn is not nil, handle VTCPConn case
 					if result, exists := connectionTable[*v.VConn]; exists {
 						fmt.Printf("%-10d %-15s %-10s %-15s %-10s %-10s\n",
-							index,                              // SID as index
-							v.VConn.SourceIp.String(),          // LAddr
-							strconv.Itoa(int(v.VConn.SourcePort)), // LPort
-							v.VConn.DestIp.String(),            // RAddr
-							strconv.Itoa(int(v.VConn.DestPort)), // RPort
-							result.State)                       // Status
+							index,                              
+							v.VConn.SourceIp.String(),         
+							strconv.Itoa(int(v.VConn.SourcePort)), 
+							v.VConn.DestIp.String(),           
+							strconv.Itoa(int(v.VConn.DestPort)),
+							result.State)                      
 					}
 				}else {
-						// Handle case where VTCPConn exists but not in connectionTable
-						fmt.Printf("%-10d %-15s %-10s %-15s %-10s %-10s\n",
-							index,       // SID as index
-							"0.0.0.0",   // LAddr placeholder for listener
-							strconv.Itoa(int(v.Port)), // LPort as the uint16 listener port
-							"0.0.0.0",   // RAddr placeholder for listener
-							"0",         // RPort placeholder
-							"LISTEN")    // Default listener status
+					fmt.Printf("%-10d %-15s %-10s %-15s %-10s %-10s\n",
+						index,       
+						"0.0.0.0",  
+						strconv.Itoa(int(v.Port)),
+						"0.0.0.0",  
+						"0",         
+						"LISTEN")   
 				}
 			}
 		} else if words[0] == "sf" {
@@ -123,7 +132,24 @@ func repl() {
 		} else if words[0] == "rf" {
 
 		} else if words[0] == "r" { // receive data on a socket
+			if len(words) < 3 {
+				fmt.Println("Usage: r <port> <bytes_to_read>")
+				continue
+			}
 
+			port, err := strconv.ParseInt(words[1], 10, 16)
+			if err != nil {
+				fmt.Printf("Invalid port number: %s\n", words[1])
+				continue
+			}
+
+			bytesToRead, err := strconv.ParseInt(words[2], 10, 16)
+			if err != nil {
+				fmt.Printf("Invalid bytes to read: %s\n", words[2])
+				continue
+			}
+
+			VRead(int16(port), int16(bytesToRead))
 		} else {
 			fmt.Println("Invalid command. Valid commands include li, ln, lr, up <ifname>, down <ifname>, send <addr> <message ...>, and q to quit.")
 		}
@@ -157,7 +183,7 @@ func (*VListener) VAccept(fourTuple pkgUtils.VTCPConn) (*pkgUtils.VTCPConn, erro
 		Head:       0,
 		State:      state.SYN_RECEIVED,
 	}
-fourtupleOrder = append(fourtupleOrder, OrderInfo{0, &fourTuple}) // Assuming `fourTuple` is a value
+	fourtupleOrder = append(fourtupleOrder, OrderInfo{0, &fourTuple}) // Assuming `fourTuple` is a value
 
 
 
@@ -185,10 +211,8 @@ func Callback_TCP(msg []byte, source netip.Addr, dest netip.Addr, ttl int) {
 	// Get the payload
 	tcpPayload := tcpHeaderAndData[tcpHdr.DataOffset:]
 
-	tcpChecksumFromHeader := tcpHdr.Checksum // Save original
+	tcpChecksumFromHeader := tcpHdr.Checksum 
 	tcpHdr.Checksum = 0
-	fmt.Println("source: ", source.String())
-	fmt.Println("dest: ", dest.String())
 
 	tcpComputedChecksum := iptcp_utils.ComputeTCPChecksum(&tcpHdr, source, dest, tcpPayload)
 
@@ -197,12 +221,12 @@ func Callback_TCP(msg []byte, source netip.Addr, dest netip.Addr, ttl int) {
 	}
 
 	fourTuple := &pkgUtils.VTCPConn{}
-	err := fourTuple.Unmarshal(tcpPayload)
+	err := fourTuple.Unmarshal(tcpPayload[:38])
 	if err != nil {
 		fmt.Println("error unmarshalling")
 	}
 
-	c := &pkgUtils.VTCPConn{ // set source addr by using getter
+	c := &pkgUtils.VTCPConn{
 		SourceIp:   fourTuple.DestIp,
 		SourcePort: fourTuple.DestPort,
 		DestIp:     fourTuple.SourceIp,
@@ -215,12 +239,10 @@ func Callback_TCP(msg []byte, source netip.Addr, dest netip.Addr, ttl int) {
 	if exists {
 		if connection.State == state.SYN_RECEIVED {
 			connection.State = state.ESTABLISHED
-			fmt.Println("Got here! ", state.SYN_RECEIVED)
 			return
 		}
 		if connection.State == state.SYN_SENT {
 			connection.State = state.ESTABLISHED
-			fmt.Println("Got here! ", state.SYN_SENT)
 			bytes, err := pkgUtils.Marshal(*c)
 			if err != nil {
 				fmt.Println("Err")
@@ -235,21 +257,18 @@ func Callback_TCP(msg []byte, source netip.Addr, dest netip.Addr, ttl int) {
 			return
 		}
 		//handle this in milestone 2
-		fmt.Println("Got here!")
+		connection.LastSeen = int16(tcpHdr.AckNum)
+		connection.TCB = append(connection.TCB, tcpPayload[38:]...)
 		return
 	}
 
 	// IF DOES NOT EXIST:
-	// look at the table for the 4-tuple that it's receiving
 	port := tcpHdr.DstPort
-	fmt.Println("Port to check: " + strconv.FormatInt(int64(port), 10))
 	listenConn, exists := listenerTable[int16(port)]
 	if exists {
 		fmt.Println("exists")
 		listenConn.Chan <- c
 	}
-	// if found, go into the table, grab the channel that corresponds to the listener, send information
-
 }
 
 func VConnect(addr netip.Addr, port int16) (*pkgUtils.VTCPConn, error) {
@@ -287,6 +306,68 @@ func VConnect(addr netip.Addr, port int16) (*pkgUtils.VTCPConn, error) {
 	fourtupleOrder = append(fourtupleOrder, OrderInfo{0,c})
 
 	return c, nil
+}
+
+func VSend(entry int16, message string) error {
+	orderStruct := fourtupleOrder[entry]
+
+	if orderStruct.VConn == nil {
+		// Cannot send message to a listener entry
+		return fmt.Errorf("cannot send message: listener entry")
+	}
+
+	bytes, err := pkgUtils.Marshal(*orderStruct.VConn)
+
+	bufferStruct := connectionTable[*orderStruct.VConn]
+
+	bytesMessage := []byte(message)
+	bufferStruct.Next += int16(len(message))
+	seqNum := bufferStruct.Next 
+	ackNum := bufferStruct.LastSeen 
+
+	totalBytes := append(bytes,bytesMessage...)
+
+	err = sendTCPPacket(
+		orderStruct.VConn.SourceIp,
+		orderStruct.VConn.DestIp,
+		orderStruct.VConn.SourcePort,
+		orderStruct.VConn.DestPort,
+		seqNum,
+		ackNum,
+		header.TCPFlagSyn|header.TCPFlagAck,
+		totalBytes,
+	)
+
+	if err != nil {
+		return fmt.Errorf("error sending TCP packet: %w", err)
+	}
+
+	return nil
+}
+
+func VRead(entry int16, bytesToRead int16) error {
+	orderStruct := fourtupleOrder[entry]
+
+	if orderStruct.VConn == nil {
+		// Cannot send message to a listener entry
+		return fmt.Errorf("cannot send message: listener entry")
+	}
+
+	bufferStruct := connectionTable[*orderStruct.VConn]
+
+	if len(bufferStruct.TCB) < int(bytesToRead) {
+		return fmt.Errorf("not enough data in buffer to read %d bytes", bytesToRead)
+	}
+
+	dataToRead := bufferStruct.TCB[:bytesToRead]
+
+	fmt.Printf("Read %d bytes: %s\n", bytesToRead, string(dataToRead))
+
+	bufferStruct.TCB = bufferStruct.TCB[bytesToRead:]
+
+	connectionTable[*orderStruct.VConn] = bufferStruct
+
+	return nil
 }
 
 

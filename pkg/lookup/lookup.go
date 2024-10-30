@@ -526,7 +526,6 @@ func readConn(iface *NetworkEntry, conn net.Conn) { // thread that continously r
 			buf := make([]byte, maxPacketSize)
 
 			_, err := conn.Read(buf)
-			fmt.Println("after read")
 			if err != nil {
 				fmt.Println("Error reading from connection")
 			}

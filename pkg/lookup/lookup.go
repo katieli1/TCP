@@ -11,7 +11,7 @@ import (
 	"net"
 	"net/netip"
 	"os"
-	"strconv"
+	//"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -59,7 +59,7 @@ var RipNeighborsMap = make(map[netip.Addr]netip.Addr) // for routers
 // Combined table for interfaces and static routes
 var networkTable = make(map[netip.Prefix]*NetworkEntry)
 
-type HandlerFunc func(message string, source netip.Addr, dest netip.Addr, ttl int)
+type HandlerFunc func(message []byte, source netip.Addr, dest netip.Addr, ttl int)
 
 var handlerTable = make(map[uint8]HandlerFunc)
 
@@ -123,130 +123,130 @@ func sendRIPData(dest netip.Addr) {
 	}
 }
 
-func Callback_test(msg string, source netip.Addr, dest netip.Addr, ttl int) { // callback for test packets
-	fmt.Println("Received test packet: Src: " + source.String() + ", Dst: " + dest.String() + ", TTL: " + fmt.Sprintf("%d", ttl) + ", Data: " + msg)
+func Callback_test(msg []byte, source netip.Addr, dest netip.Addr, ttl int) { // callback for test packets
+	//fmt.Println("Received test packet: Src: " + source.String() + ", Dst: " + dest.String() + ", TTL: " + fmt.Sprintf("%d", ttl) + ", Data: " + msg)
 }
 
-func Callback_RIP(message string, source netip.Addr, dest netip.Addr, ttl int) { // callback for RIP updates that updates tables
-	nextHop := source // the address that we heard about this data from
-	var changed = false
-	var changedEntries []*Neighbor // keep track of any entries that changed (to be able to send triggered updates)
-	var routes []RouteInfo
-	entries := strings.Split(message, ";")
-	typeOfMessage := strings.Split(entries[0], ",")[0]
+func Callback_RIP(message []byte, source netip.Addr, dest netip.Addr, ttl int) { // callback for RIP updates that updates tables
+	// nextHop := source // the address that we heard about this data from
+	// var changed = false
+	// var changedEntries []*Neighbor // keep track of any entries that changed (to be able to send triggered updates)
+	// var routes []RouteInfo
+	// entries := strings.Split(message, ";")
+	// typeOfMessage := strings.Split(entries[0], ",")[0]
 
-	typeOfMessageInt, err := strconv.Atoi(typeOfMessage) // check whether it's a request for RIP data or a packet that contains RIP data
-	if err != nil {
-		return
-	}
+	// typeOfMessageInt, err := strconv.Atoi(typeOfMessage) // check whether it's a request for RIP data or a packet that contains RIP data
+	// if err != nil {
+	// 	return
+	// }
 
-	// parse data
-	entriesWithoutMetadata := entries[1:]
-	for _, entry := range entriesWithoutMetadata {
-		fields := strings.Split(entry, ",")
-		if len(fields) != 3 {
-			continue
-		}
+	// // parse data
+	// entriesWithoutMetadata := entries[1:]
+	// for _, entry := range entriesWithoutMetadata {
+	// 	fields := strings.Split(entry, ",")
+	// 	if len(fields) != 3 {
+	// 		continue
+	// 	}
 
-		cost, err := strconv.Atoi(fields[0])
-		if err != nil {
-			continue
-		}
+	// 	cost, err := strconv.Atoi(fields[0])
+	// 	if err != nil {
+	// 		continue
+	// 	}
 
-		prefixLength, err := strconv.Atoi(fields[1])
-		if err != nil {
-			continue
-		}
-		cleanedString := strings.TrimSpace(strings.ReplaceAll(fields[2], "\x00", ""))
-		addr, err := strconv.Atoi(cleanedString)
-		if err != nil {
-			fmt.Println("Invalid address:", fields[2], "Error:", err)
-			continue
-		}
+	// 	prefixLength, err := strconv.Atoi(fields[1])
+	// 	if err != nil {
+	// 		continue
+	// 	}
+	// 	cleanedString := strings.TrimSpace(strings.ReplaceAll(fields[2], "\x00", ""))
+	// 	addr, err := strconv.Atoi(cleanedString)
+	// 	if err != nil {
+	// 		fmt.Println("Invalid address:", fields[2], "Error:", err)
+	// 		continue
+	// 	}
 
-		result := pkgUtils.Uint32ToIP(uint32(addr))
-		routes = append(routes, RouteInfo{
-			Cost:         cost,
-			PrefixLength: prefixLength,
-			Address:      pkgUtils.IpToUint32(result),
-		})
-	}
+	// 	result := pkgUtils.Uint32ToIP(uint32(addr))
+	// 	routes = append(routes, RouteInfo{
+	// 		Cost:         cost,
+	// 		PrefixLength: prefixLength,
+	// 		Address:      pkgUtils.IpToUint32(result),
+	// 	})
+	// }
 
-	if uint32(typeOfMessageInt) == 1 { // if it's a request for RIP data, send RIP data and return
-		for addr := range RipNeighborsMap {
-			sendRIPHelper(addr, false, nil)
-		}
-		return
-	}
+	// if uint32(typeOfMessageInt) == 1 { // if it's a request for RIP data, send RIP data and return
+	// 	for addr := range RipNeighborsMap {
+	// 		sendRIPHelper(addr, false, nil)
+	// 	}
+	// 	return
+	// }
 
-	for _, route := range routes { // for each route we received info about from the RIP data
-		address := pkgUtils.Uint32ToIP(route.Address)
-		prefix := netip.PrefixFrom(address, route.PrefixLength)
+	// for _, route := range routes { // for each route we received info about from the RIP data
+	// 	address := pkgUtils.Uint32ToIP(route.Address)
+	// 	prefix := netip.PrefixFrom(address, route.PrefixLength)
 
-		networkAddr := prefix.Masked().Addr()
-		maskedPrefix := netip.PrefixFrom(networkAddr, prefix.Bits())
-		if entry, exists := networkTable[maskedPrefix]; exists { // if we already know about the prefix
+	// 	networkAddr := prefix.Masked().Addr()
+	// 	maskedPrefix := netip.PrefixFrom(networkAddr, prefix.Bits())
+	// 	if entry, exists := networkTable[maskedPrefix]; exists { // if we already know about the prefix
 
-			if entry.Name != "" {
-				continue
-			}
-			if neighbor, found := entry.LookupTable[address]; found { // if we already know about the address
-				//poison reverse - split horizon
-				newCost := route.Cost + 1
-				if newCost >= maxCost {
-					continue
-				}
-				if (neighbor.NextHop == nextHop) || neighbor.Cost > newCost { // update cost if necessary
-					if neighbor.Cost != newCost {
-						changed = true
-						changedEntries = append(changedEntries, neighbor)
-					}
-					neighbor.Cost = newCost
-					neighbor.NextHop = nextHop
-					entry.LookupTable[address].LastHeard = time.Now()
-				}
-			} else { // if we know about the prefix but not address, add the address to our lookup table
-				entry.LookupTable[address] = &Neighbor{
-					DestAddr: address,
-					Cost:     route.Cost + 1,
-					IpPrefix: maskedPrefix,
-					NextHop:  nextHop,
-					WillHop:  true,
-				}
-				changed = true
-				changedEntries = append(changedEntries, entry.LookupTable[address])
-			}
+	// 		if entry.Name != "" {
+	// 			continue
+	// 		}
+	// 		if neighbor, found := entry.LookupTable[address]; found { // if we already know about the address
+	// 			//poison reverse - split horizon
+	// 			newCost := route.Cost + 1
+	// 			if newCost >= maxCost {
+	// 				continue
+	// 			}
+	// 			if (neighbor.NextHop == nextHop) || neighbor.Cost > newCost { // update cost if necessary
+	// 				if neighbor.Cost != newCost {
+	// 					changed = true
+	// 					changedEntries = append(changedEntries, neighbor)
+	// 				}
+	// 				neighbor.Cost = newCost
+	// 				neighbor.NextHop = nextHop
+	// 				entry.LookupTable[address].LastHeard = time.Now()
+	// 			}
+	// 		} else { // if we know about the prefix but not address, add the address to our lookup table
+	// 			entry.LookupTable[address] = &Neighbor{
+	// 				DestAddr: address,
+	// 				Cost:     route.Cost + 1,
+	// 				IpPrefix: maskedPrefix,
+	// 				NextHop:  nextHop,
+	// 				WillHop:  true,
+	// 			}
+	// 			changed = true
+	// 			changedEntries = append(changedEntries, entry.LookupTable[address])
+	// 		}
 
-		} else { // if we don't know about the prefix, construct a new entry to represent this subnet
-			newEntry := &NetworkEntry{
-				IpPrefix:    maskedPrefix,
-				IpAddr:      nextHop,
-				LookupTable: make(map[netip.Addr]*Neighbor),
-				Up:          true,
-				IsDefault:   false,
-			}
-			newEntry.LookupTable[address] = &Neighbor{
-				DestAddr:  address,
-				Cost:      route.Cost + 1,
-				IpPrefix:  maskedPrefix,
-				NextHop:   nextHop,
-				WillHop:   true,
-				LastHeard: time.Now(),
-			}
-			networkTable[maskedPrefix] = newEntry
-			changed = true
-			changedEntries = append(changedEntries, newEntry.LookupTable[address])
+	// 	} else { // if we don't know about the prefix, construct a new entry to represent this subnet
+	// 		newEntry := &NetworkEntry{
+	// 			IpPrefix:    maskedPrefix,
+	// 			IpAddr:      nextHop,
+	// 			LookupTable: make(map[netip.Addr]*Neighbor),
+	// 			Up:          true,
+	// 			IsDefault:   false,
+	// 		}
+	// 		newEntry.LookupTable[address] = &Neighbor{
+	// 			DestAddr:  address,
+	// 			Cost:      route.Cost + 1,
+	// 			IpPrefix:  maskedPrefix,
+	// 			NextHop:   nextHop,
+	// 			WillHop:   true,
+	// 			LastHeard: time.Now(),
+	// 		}
+	// 		networkTable[maskedPrefix] = newEntry
+	// 		changed = true
+	// 		changedEntries = append(changedEntries, newEntry.LookupTable[address])
 
-		}
+	// 	}
 
-	}
-	if changed {
-		for addr := range RipNeighborsMap {
-			if len(changedEntries) > 0 { // if any entries have changed
-				sendRIPHelper(addr, false, changedEntries) // send a RIP update about each changed entry
-			}
-		}
-	}
+	// }
+	// if changed {
+	// 	for addr := range RipNeighborsMap {
+	// 		if len(changedEntries) > 0 { // if any entries have changed
+	// 			sendRIPHelper(addr, false, changedEntries) // send a RIP update about each changed entry
+	// 		}
+	// 	}
+	// }
 }
 
 func sendRipRequest(dest netip.Addr, shouldLock bool) { // method that sends request to receive RIP data from neighbors
@@ -656,7 +656,7 @@ func sendIPHelper(dest netip.Addr, protocolNum uint8, packet []byte, shouldLock 
 		return errors.New("checksum is bad")
 	}
 
-	message := packet[headerSize:]
+	message := packet[headerSize:header.TotalLen]
 	var bestMatch netip.Prefix
 	if shouldLock {
 		networkTableLock.RLock()
@@ -666,7 +666,7 @@ func sendIPHelper(dest netip.Addr, protocolNum uint8, packet []byte, shouldLock 
 		addr := networkTable[prefix].IpAddr
 		if addr == header.Dst && networkTable[prefix].Name != "" { // if this packet is for me
 			if callback, found := handlerTable[protocolNum]; found {
-				callback(string(message), header.Src, header.Dst, header.TTL) // invoke callback function (updates table for RIP, prints for test packets)
+				callback(message, header.Src, header.Dst, header.TTL) // invoke callback function (updates table for RIP, prints for test packets)
 				if shouldLock {
 					networkTableLock.RUnlock()
 				}

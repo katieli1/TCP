@@ -1,18 +1,18 @@
 package tcp
 
 import (
-	"github.com/google/netstack/tcpip/header"
 	"bufio"
 	"fmt"
+	"github.com/google/netstack/tcpip/header"
 	"ip/pkg/iptcp_utils"
-	state "ip/pkg/tcp_states"
 	"ip/pkg/lookup"
 	"ip/pkg/pkgUtils"
+	state "ip/pkg/tcp_states"
+	"math/rand"
 	"net/netip"
 	"os"
 	"strconv"
 	"strings"
-	"math/rand"
 	"time"
 )
 
@@ -22,12 +22,18 @@ type TCPMetadata struct {
 	LastSeen   int16
 	Next       int16
 	Head       int16
-	State	   state.TCPState
+	State      state.TCPState
 }
 type VListener struct {
 	Port int16
 	Chan chan (*pkgUtils.VTCPConn)
 }
+type OrderInfo struct {
+    Port     int16
+    VConn    *pkgUtils.VTCPConn
+}
+
+var fourtupleOrder []OrderInfo
 
 var connectionTable = make(map[pkgUtils.VTCPConn]*TCPMetadata)
 var listenerTable = make(map[int16]*VListener)
@@ -89,25 +95,28 @@ func repl() {
 		} else if words[0] == "ls" {
 			fmt.Printf("%-10s %-15s %-10s %-15s %-10s %-10s\n", "SID", "LAddr", "LPort", "RAddr", "RPort", "Status")
 
-			// Loop through listenerTable entries and print details
-			for port := range listenerTable {
-				fmt.Printf("%-10s %-15s %-10s %-15s %-10s %-10s\n", 
-					"-",          // SID (could add an ID if available)
-					"0.0.0.0",    // Placeholder for LAddr (replace if available)
-					strconv.Itoa(int(port)),
-					"0.0.0.0",          // RAddr (not applicable for listeners)
-					"0",          // RPort (not applicable for listeners)
-					"LISTEN")
-			}
-
-			for conn := range connectionTable {
-				fmt.Printf("%-10s %-15s %-10s %-15s %-10s %-10s\n", 
-					"-",                                              // SID (could add an ID if available)
-					conn.SourceIp.String(),                           // LAddr
-					strconv.Itoa(int(conn.SourcePort)),               // LPort
-					conn.DestIp.String(),                             // RAddr
-					strconv.Itoa(int(conn.DestPort)),                 // RPort
-					connectionTable[conn].State)                                    // Status (example status, could change if needed)
+			for index, v := range fourtupleOrder {
+				if v.VConn != nil {
+				// If the VConn is not nil, handle VTCPConn case
+					if result, exists := connectionTable[*v.VConn]; exists {
+						fmt.Printf("%-10d %-15s %-10s %-15s %-10s %-10s\n",
+							index,                              // SID as index
+							v.VConn.SourceIp.String(),          // LAddr
+							strconv.Itoa(int(v.VConn.SourcePort)), // LPort
+							v.VConn.DestIp.String(),            // RAddr
+							strconv.Itoa(int(v.VConn.DestPort)), // RPort
+							result.State)                       // Status
+					}
+				}else {
+						// Handle case where VTCPConn exists but not in connectionTable
+						fmt.Printf("%-10d %-15s %-10s %-15s %-10s %-10s\n",
+							index,       // SID as index
+							"0.0.0.0",   // LAddr placeholder for listener
+							strconv.Itoa(int(v.Port)), // LPort as the uint16 listener port
+							"0.0.0.0",   // RAddr placeholder for listener
+							"0",         // RPort placeholder
+							"LISTEN")    // Default listener status
+				}
 			}
 		} else if words[0] == "sf" {
 
@@ -128,15 +137,15 @@ func VListen(port int16) *VListener {
 func ACommand(port int16) {
 	listenConn := VListen(port)
 	listenerTable[port] = listenConn
-
+	fourtupleOrder = append(fourtupleOrder, OrderInfo{port,nil})
 	for {
-		fourTuple, ok:= <-listenConn.Chan
+		fourTuple, ok := <-listenConn.Chan
 		if !ok {
 			fmt.Println("failed")
 		}
 		fmt.Println("send accept now")
 		clientConn, err := listenConn.VAccept(*fourTuple)
-				fmt.Println("send accept now",clientConn,err)
+		fmt.Println("send accept now", clientConn, err)
 	}
 }
 
@@ -146,8 +155,11 @@ func (*VListener) VAccept(fourTuple pkgUtils.VTCPConn) (*pkgUtils.VTCPConn, erro
 		LastSeen:   0,
 		Next:       0,
 		Head:       0,
-		State: state.SYN_RECEIVED,
+		State:      state.SYN_RECEIVED,
 	}
+fourtupleOrder = append(fourtupleOrder, OrderInfo{0, &fourTuple}) // Assuming `fourTuple` is a value
+
+
 
 	bytes, err := pkgUtils.Marshal(fourTuple)
 	if err != nil {
@@ -162,9 +174,7 @@ func (*VListener) VAccept(fourTuple pkgUtils.VTCPConn) (*pkgUtils.VTCPConn, erro
 	return nil, nil
 }
 
-
-func Callback_TCP(msg string, source netip.Addr, dest netip.Addr, ttl int) {
-	fmt.Println("callback tcp")
+func Callback_TCP(msg []byte, source netip.Addr, dest netip.Addr, ttl int) {
 	// FOR VCONNECT:
 	// marshal into 4-tuple
 	tcpHeaderAndData := []byte(msg)
@@ -201,11 +211,11 @@ func Callback_TCP(msg string, source netip.Addr, dest netip.Addr, ttl int) {
 
 	// if ALREADY EXISTS, we are not receiving a VConnect. we should update the buffer in connection table
 
-	connection,exists := connectionTable[*c]
+	connection, exists := connectionTable[*c]
 	if exists {
 		if connection.State == state.SYN_RECEIVED {
 			connection.State = state.ESTABLISHED
-			fmt.Println("Got here! ",state.SYN_RECEIVED)
+			fmt.Println("Got here! ", state.SYN_RECEIVED)
 			return
 		}
 		if connection.State == state.SYN_SENT {
@@ -217,7 +227,7 @@ func Callback_TCP(msg string, source netip.Addr, dest netip.Addr, ttl int) {
 				return
 			}
 
-			err = sendTCPPacket(c.SourceIp, c.DestIp, c.SourcePort, c.DestPort,0,tcpHdr.SeqNum+1, header.TCPFlagAck, bytes)
+			err = sendTCPPacket(c.SourceIp, c.DestIp, c.SourcePort, c.DestPort,0,int16(tcpHdr.SeqNum+1), header.TCPFlagAck, bytes)
 			if err != nil {
 				fmt.Println("Err")
 				return
@@ -229,7 +239,6 @@ func Callback_TCP(msg string, source netip.Addr, dest netip.Addr, ttl int) {
 		return
 	}
 
-	
 	// IF DOES NOT EXIST:
 	// look at the table for the 4-tuple that it's receiving
 	port := tcpHdr.DstPort
@@ -242,13 +251,14 @@ func Callback_TCP(msg string, source netip.Addr, dest netip.Addr, ttl int) {
 	// if found, go into the table, grab the channel that corresponds to the listener, send information
 
 }
+
 func VConnect(addr netip.Addr, port int16) (*pkgUtils.VTCPConn, error) {
 	randomPort := GenerateUniquePort(addr, connectionTable)
 	sourceIp, err := lookup.GetHostIp()
 	if err != nil {
 		return nil, err
 	}
-	
+
 	c := &pkgUtils.VTCPConn{
 		SourceIp:   sourceIp,
 		SourcePort: int16(randomPort),
@@ -272,8 +282,9 @@ func VConnect(addr netip.Addr, port int16) (*pkgUtils.VTCPConn, error) {
 		LastSeen:   0,
 		Next:       0,
 		Head:       0,
-		State: state.SYN_SENT,
+		State:      state.SYN_SENT,
 	}
+	fourtupleOrder = append(fourtupleOrder, OrderInfo{0,c})
 
 	return c, nil
 }
@@ -283,8 +294,8 @@ func sendTCPPacket(srcIp, destIp netip.Addr, srcPort, destPort, Syn, Ack int16, 
 	tcpHdr := header.TCPFields{
 		SrcPort:       uint16(srcPort),
 		DstPort:       uint16(destPort),
-		SeqNum:        Syn,
-		AckNum:        Ack,
+		SeqNum:        uint32(Syn),
+		AckNum:        uint32(Ack),
 		DataOffset:    20,
 		Flags:         flags,
 		WindowSize:    65535,
@@ -312,7 +323,6 @@ func sendTCPPacket(srcIp, destIp netip.Addr, srcPort, destPort, Syn, Ack int16, 
 	return nil
 }
 
-
 func GenerateUniquePort(addr netip.Addr, connectionTable map[pkgUtils.VTCPConn]*TCPMetadata) int16 {
 	rand.Seed(time.Now().UnixNano())
 	min := 1024
@@ -321,7 +331,7 @@ func GenerateUniquePort(addr netip.Addr, connectionTable map[pkgUtils.VTCPConn]*
 	var randomPort int
 	for {
 		randomPort = rand.Intn(max-min+1) + min
-		
+
 		isPortInUse := false
 		for conn := range connectionTable {
 			if conn.SourceIp == addr && conn.SourcePort == int16(randomPort) {

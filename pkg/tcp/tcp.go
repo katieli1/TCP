@@ -3,7 +3,6 @@ package tcp
 import (
 	"bufio"
 	"fmt"
-	"github.com/google/netstack/tcpip/header"
 	"ip/pkg/iptcp_utils"
 	"ip/pkg/lookup"
 	"ip/pkg/pkgUtils"
@@ -14,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/google/netstack/tcpip/header"
 )
 
 type TCPMetadata struct {
@@ -29,15 +30,15 @@ type VListener struct {
 	Chan chan (*pkgUtils.VTCPConn)
 }
 type OrderInfo struct {
-    Port     int16
-    VConn    *pkgUtils.VTCPConn
+	Port  int16
+	VConn *pkgUtils.VTCPConn
 }
 
 var fourtupleOrder []OrderInfo
 
 var connectionTable = make(map[pkgUtils.VTCPConn]*TCPMetadata)
 var listenerTable = make(map[int16]*VListener)
-var bufsize = 1024
+var bufsize = 10
 var sid = 0
 
 func Initialize(fileName string) {
@@ -110,21 +111,21 @@ func repl() {
 				if v.VConn != nil {
 					if result, exists := connectionTable[*v.VConn]; exists {
 						fmt.Printf("%-10d %-15s %-10s %-15s %-10s %-10s\n",
-							index,                              
-							v.VConn.SourceIp.String(),         
-							strconv.Itoa(int(v.VConn.SourcePort)), 
-							v.VConn.DestIp.String(),           
+							index,
+							v.VConn.SourceIp.String(),
+							strconv.Itoa(int(v.VConn.SourcePort)),
+							v.VConn.DestIp.String(),
 							strconv.Itoa(int(v.VConn.DestPort)),
-							result.State)                      
+							result.State)
 					}
-				}else {
+				} else {
 					fmt.Printf("%-10d %-15s %-10s %-15s %-10s %-10s\n",
-						index,       
-						"0.0.0.0",  
+						index,
+						"0.0.0.0",
 						strconv.Itoa(int(v.Port)),
-						"0.0.0.0",  
-						"0",         
-						"LISTEN")   
+						"0.0.0.0",
+						"0",
+						"LISTEN")
 				}
 			}
 		} else if words[0] == "sf" {
@@ -163,7 +164,7 @@ func VListen(port int16) *VListener {
 func ACommand(port int16) {
 	listenConn := VListen(port)
 	listenerTable[port] = listenConn
-	fourtupleOrder = append(fourtupleOrder, OrderInfo{port,nil})
+	fourtupleOrder = append(fourtupleOrder, OrderInfo{port, nil})
 	for {
 		fourTuple, ok := <-listenConn.Chan
 		if !ok {
@@ -185,14 +186,12 @@ func (*VListener) VAccept(fourTuple pkgUtils.VTCPConn) (*pkgUtils.VTCPConn, erro
 	}
 	fourtupleOrder = append(fourtupleOrder, OrderInfo{0, &fourTuple}) // Assuming `fourTuple` is a value
 
-
-
 	bytes, err := pkgUtils.Marshal(fourTuple)
 	if err != nil {
 		return nil, err
 	}
 
-	err = sendTCPPacket(fourTuple.SourceIp, fourTuple.DestIp, fourTuple.SourcePort, fourTuple.DestPort,1,1, header.TCPFlagSyn|header.TCPFlagAck, bytes)
+	err = sendTCPPacket(fourTuple.SourceIp, fourTuple.DestIp, fourTuple.SourcePort, fourTuple.DestPort, 1, 1, header.TCPFlagSyn|header.TCPFlagAck, bytes)
 	if err != nil {
 		return nil, err
 	}
@@ -201,6 +200,7 @@ func (*VListener) VAccept(fourTuple pkgUtils.VTCPConn) (*pkgUtils.VTCPConn, erro
 }
 
 func Callback_TCP(msg []byte, source netip.Addr, dest netip.Addr, ttl int) {
+
 	// FOR VCONNECT:
 	// marshal into 4-tuple
 	tcpHeaderAndData := []byte(msg)
@@ -211,7 +211,7 @@ func Callback_TCP(msg []byte, source netip.Addr, dest netip.Addr, ttl int) {
 	// Get the payload
 	tcpPayload := tcpHeaderAndData[tcpHdr.DataOffset:]
 
-	tcpChecksumFromHeader := tcpHdr.Checksum 
+	tcpChecksumFromHeader := tcpHdr.Checksum
 	tcpHdr.Checksum = 0
 
 	tcpComputedChecksum := iptcp_utils.ComputeTCPChecksum(&tcpHdr, source, dest, tcpPayload)
@@ -230,7 +230,9 @@ func Callback_TCP(msg []byte, source netip.Addr, dest netip.Addr, ttl int) {
 	// if ALREADY EXISTS, we are not receiving a VConnect. we should update the buffer in connection table
 
 	connection, exists := connectionTable[*c]
+
 	if exists {
+		fmt.Println("head at start of callback: ", connection.Head)
 		if connection.State == state.SYN_RECEIVED {
 			connection.State = state.ESTABLISHED
 			return
@@ -243,7 +245,7 @@ func Callback_TCP(msg []byte, source netip.Addr, dest netip.Addr, ttl int) {
 				return
 			}
 
-			err = sendTCPPacket(c.SourceIp, c.DestIp, c.SourcePort, c.DestPort,0,int16(tcpHdr.SeqNum+1), header.TCPFlagAck, bytes)
+			err = sendTCPPacket(c.SourceIp, c.DestIp, c.SourcePort, c.DestPort, 0, int16(tcpHdr.SeqNum+1), header.TCPFlagAck, bytes)
 			if err != nil {
 				fmt.Println("Err")
 				return
@@ -252,7 +254,20 @@ func Callback_TCP(msg []byte, source netip.Addr, dest netip.Addr, ttl int) {
 		}
 		//handle this in milestone 2
 		connection.LastSeen = int16(tcpHdr.AckNum)
-		connection.TCB = append(connection.TCB, tcpPayload...)
+		// detect wraparound
+		if connection.Head+int16(len(tcpPayload)) > int16(bufsize) { // yes wraparound
+			fmt.Println("wraparoudn in callback")
+			secondChunkSize := connection.Head + int16(len(tcpPayload)) - int16(bufsize)
+			firstChunkSize := int16(bufsize) - connection.Head
+			connection.TCB = append(connection.TCB, tcpPayload[:firstChunkSize]...)
+			copy(connection.TCB[:secondChunkSize], tcpPayload[firstChunkSize:])
+
+		} else { // no wraparaound
+			fmt.Println("no wrap in callback")
+			connection.TCB = append(connection.TCB, tcpPayload...)
+		}
+
+		fmt.Println("buffer in callback: ", connection.TCB)
 		return
 	}
 
@@ -279,7 +294,7 @@ func VConnect(addr netip.Addr, port int16) (*pkgUtils.VTCPConn, error) {
 		DestPort:   port,
 	}
 
-	err = sendTCPPacket(sourceIp, addr, int16(randomPort), port,1,0, header.TCPFlagSyn, nil)
+	err = sendTCPPacket(sourceIp, addr, int16(randomPort), port, 1, 0, header.TCPFlagSyn, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -292,7 +307,7 @@ func VConnect(addr netip.Addr, port int16) (*pkgUtils.VTCPConn, error) {
 		Head:       0,
 		State:      state.SYN_SENT,
 	}
-	fourtupleOrder = append(fourtupleOrder, OrderInfo{0,c})
+	fourtupleOrder = append(fourtupleOrder, OrderInfo{0, c})
 
 	return c, nil
 }
@@ -309,8 +324,8 @@ func VSend(entry int16, message string) error {
 
 	bytesMessage := []byte(message)
 	bufferStruct.Next += int16(len(message))
-	seqNum := bufferStruct.Next 
-	ackNum := bufferStruct.LastSeen 
+	seqNum := bufferStruct.Next
+	ackNum := bufferStruct.LastSeen
 
 	err := sendTCPPacket(
 		orderStruct.VConn.SourceIp,
@@ -338,23 +353,38 @@ func VRead(entry int16, bytesToRead int16) error {
 		return fmt.Errorf("cannot send message: listener entry")
 	}
 
-	bufferStruct := connectionTable[*orderStruct.VConn]
+	metadata := connectionTable[*orderStruct.VConn]
 
-	if len(bufferStruct.TCB) < int(bytesToRead) {
+	if len(metadata.TCB) < int(bytesToRead) {
 		return fmt.Errorf("not enough data in buffer to read %d bytes", bytesToRead)
 	}
 
-	dataToRead := bufferStruct.TCB[:bytesToRead]
+	var dataToRead []byte
+	// detect wraparound; potentially off by 1
+	if metadata.Head+bytesToRead <= int16(bufsize) { // there is no wraparound
+		fmt.Println("no wraparound. metadata head: ", metadata.Head)
+		fmt.Println("bytes to read ", bytesToRead)
+		end := metadata.Head + bytesToRead
+		dataToRead = metadata.TCB[metadata.Head:end]
+	} else { // there is a wraparound
+		fmt.Println("wraparound")
+		dataToRead = metadata.TCB[metadata.Head:] // first chunk: head to end of buffer
+		diff := metadata.Head + bytesToRead - int16(bufsize)
+		dataToRead = append(dataToRead, metadata.TCB[:diff]...) // append second chunk (starting from beginning of buffer)
+	}
 
+	fmt.Println("data as bytes: ", dataToRead)
 	fmt.Printf("Read %d bytes: %s\n", bytesToRead, string(dataToRead))
 
-	bufferStruct.TCB = bufferStruct.TCB[bytesToRead:]
+	//metadata.TCB = metadata.TCB[bytesToRead:]
+	metadata.Head += bytesToRead
 
-	connectionTable[*orderStruct.VConn] = bufferStruct
+	metadata.Head = metadata.Head % int16(bufsize)
+
+	// connectionTable[*orderStruct.VConn] = metadata
 
 	return nil
 }
-
 
 func sendTCPPacket(srcIp, destIp netip.Addr, srcPort, destPort, Syn, Ack int16, flags uint8, data []byte) error {
 	tcpHdr := header.TCPFields{

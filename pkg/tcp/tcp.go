@@ -17,10 +17,11 @@ import (
 	"github.com/google/netstack/tcpip/header"
 )
 
-// TODO: fix seq / ack numbers (rename Syn), add second buffer (for receiver) to TCPMetadata, separate out buffer logic into library
+// TODO: separate out buffer logic into library
 
 type TCPMetadata struct {
 	TCB        []byte
+	RecieveBuffer        []byte
 	isReceiver bool
 	LastSeen   int16
 	Next       int16
@@ -261,15 +262,15 @@ func Callback_TCP(msg []byte, source netip.Addr, dest netip.Addr, ttl int) {
 			fmt.Println("wraparoudn in callback")
 			secondChunkSize := connection.Head + int16(len(tcpPayload)) - int16(bufsize)
 			firstChunkSize := int16(bufsize) - connection.Head
-			connection.TCB = append(connection.TCB, tcpPayload[:firstChunkSize]...)
-			copy(connection.TCB[:secondChunkSize], tcpPayload[firstChunkSize:])
+			connection.RecieveBuffer = append(connection.RecieveBuffer, tcpPayload[:firstChunkSize]...)
+			copy(connection.RecieveBuffer[:secondChunkSize], tcpPayload[firstChunkSize:])
 
 		} else { // no wraparaound
 			fmt.Println("no wrap in callback")
-			connection.TCB = append(connection.TCB, tcpPayload...)
+			connection.RecieveBuffer = append(connection.RecieveBuffer, tcpPayload...)
 		}
 
-		fmt.Println("buffer in callback: ", connection.TCB)
+		fmt.Println("buffer in callback: ", connection.RecieveBuffer)
 		return
 	}
 
@@ -303,6 +304,7 @@ func VConnect(addr netip.Addr, port int16) (*pkgUtils.VTCPConn, error) {
 
 	connectionTable[*c] = &TCPMetadata{
 		TCB:        make([]byte, bufsize),
+		RecieveBuffer: make([]byte,bufsize)
 		isReceiver: false,
 		LastSeen:   0,
 		Next:       0,
@@ -359,7 +361,7 @@ func VRead(entry int16, bytesToRead int16) error {
 
 	metadata := connectionTable[*orderStruct.VConn]
 
-	if len(metadata.TCB) < int(bytesToRead) {
+	if len(metadata.RecieveBuffer) < int(bytesToRead) {
 		return fmt.Errorf("not enough data in buffer to read %d bytes", bytesToRead)
 	}
 
@@ -369,12 +371,12 @@ func VRead(entry int16, bytesToRead int16) error {
 		fmt.Println("no wraparound. metadata head: ", metadata.Head)
 		fmt.Println("bytes to read ", bytesToRead)
 		end := metadata.Head + bytesToRead
-		dataToRead = metadata.TCB[metadata.Head:end]
+		dataToRead = metadata.RecieveBuffer[metadata.Head:end]
 	} else { // there is a wraparound
 		fmt.Println("wraparound")
-		dataToRead = metadata.TCB[metadata.Head:] // first chunk: head to end of buffer
+		dataToRead = metadata.RecieveBuffer[metadata.Head:] // first chunk: head to end of buffer
 		diff := metadata.Head + bytesToRead - int16(bufsize)
-		dataToRead = append(dataToRead, metadata.TCB[:diff]...) // append second chunk (starting from beginning of buffer)
+		dataToRead = append(dataToRead, metadata.RecieveBuffer[:diff]...) // append second chunk (starting from beginning of buffer)
 	}
 
 	fmt.Println("data as bytes: ", dataToRead)
@@ -390,16 +392,12 @@ func VRead(entry int16, bytesToRead int16) error {
 	return nil
 }
 
-func sendTCPPacket(srcIp, destIp netip.Addr, srcPort, destPort, Syn, Ack int16, flags uint8, data []byte) error {
-	// fmt.Println("received seq ", Syn)
-	// fmt.Println("casted seq ", uint32(Syn))
-	// fmt.Println("received ack ", Ack)
-	// fmt.Println("received ack ", uint32(Ack))
+func sendTCPPacket(srcIp, destIp netip.Addr, srcPort, destPort, Seq, Ack int16, flags uint8, data []byte) error {
 
 	tcpHdr := header.TCPFields{
 		SrcPort:       uint16(srcPort),
 		DstPort:       uint16(destPort),
-		SeqNum:        uint32(Syn),
+		SeqNum:        uint32(Seq),
 		AckNum:        uint32(Ack),
 		DataOffset:    20,
 		Flags:         flags,

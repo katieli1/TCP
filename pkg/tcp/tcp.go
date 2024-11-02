@@ -17,6 +17,8 @@ import (
 	"github.com/google/netstack/tcpip/header"
 )
 
+// TODO: fix seq / ack numbers (rename Syn), add second buffer (for receiver) to TCPMetadata, separate out buffer logic into library
+
 type TCPMetadata struct {
 	TCB        []byte
 	isReceiver bool
@@ -245,7 +247,7 @@ func Callback_TCP(msg []byte, source netip.Addr, dest netip.Addr, ttl int) {
 				return
 			}
 
-			err = sendTCPPacket(c.SourceIp, c.DestIp, c.SourcePort, c.DestPort, 0, int16(tcpHdr.SeqNum+1), header.TCPFlagAck, bytes)
+			err = sendTCPPacket(c.SourceIp, c.DestIp, c.SourcePort, c.DestPort, 2, 3, header.TCPFlagAck, bytes)
 			if err != nil {
 				fmt.Println("Err")
 				return
@@ -320,12 +322,14 @@ func VSend(entry int16, message string) error {
 		return fmt.Errorf("cannot send message: listener entry")
 	}
 
-	bufferStruct := connectionTable[*orderStruct.VConn]
+	metadata := connectionTable[*orderStruct.VConn]
 
 	bytesMessage := []byte(message)
-	bufferStruct.Next += int16(len(message))
-	seqNum := bufferStruct.Next
-	ackNum := bufferStruct.LastSeen
+	metadata.Next += int16(len(message))
+
+	seqNum := metadata.Next
+	fmt.Println("seqnum ", seqNum)
+	ackNum := metadata.LastSeen
 
 	err := sendTCPPacket(
 		orderStruct.VConn.SourceIp,
@@ -387,6 +391,11 @@ func VRead(entry int16, bytesToRead int16) error {
 }
 
 func sendTCPPacket(srcIp, destIp netip.Addr, srcPort, destPort, Syn, Ack int16, flags uint8, data []byte) error {
+	// fmt.Println("received seq ", Syn)
+	// fmt.Println("casted seq ", uint32(Syn))
+	// fmt.Println("received ack ", Ack)
+	// fmt.Println("received ack ", uint32(Ack))
+
 	tcpHdr := header.TCPFields{
 		SrcPort:       uint16(srcPort),
 		DstPort:       uint16(destPort),

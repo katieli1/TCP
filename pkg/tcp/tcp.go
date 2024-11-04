@@ -3,6 +3,7 @@ package tcp
 import (
 	"bufio"
 	"fmt"
+	buf "ip/pkg/buffer"
 	"ip/pkg/iptcp_utils"
 	"ip/pkg/lookup"
 	"ip/pkg/pkgUtils"
@@ -20,8 +21,8 @@ import (
 // TODO: separate out buffer logic into library
 
 type TCPMetadata struct {
-	TCB        []byte
-	RecieveBuffer        []byte
+	sendBuf    buf.Buffer
+	receiveBuf buf.Buffer
 	isReceiver bool
 	LastSeen   int16
 	Next       int16
@@ -181,6 +182,9 @@ func ACommand(port int16) {
 
 func (*VListener) VAccept(fourTuple pkgUtils.VTCPConn) (*pkgUtils.VTCPConn, error) {
 	connectionTable[fourTuple] = &TCPMetadata{
+		sendBuf:    buf.Buffer{Head: 0, Len: int16(bufsize), Arr: make([]byte, 0)},
+		receiveBuf: buf.Buffer{Head: 0, Len: int16(bufsize), Arr: make([]byte, 0)},
+
 		isReceiver: true,
 		LastSeen:   0,
 		Next:       0,
@@ -189,12 +193,7 @@ func (*VListener) VAccept(fourTuple pkgUtils.VTCPConn) (*pkgUtils.VTCPConn, erro
 	}
 	fourtupleOrder = append(fourtupleOrder, OrderInfo{0, &fourTuple}) // Assuming `fourTuple` is a value
 
-	bytes, err := pkgUtils.Marshal(fourTuple)
-	if err != nil {
-		return nil, err
-	}
-
-	err = sendTCPPacket(fourTuple.SourceIp, fourTuple.DestIp, fourTuple.SourcePort, fourTuple.DestPort, 1, 1, header.TCPFlagSyn|header.TCPFlagAck, bytes)
+	err := sendTCPPacket(fourTuple.SourceIp, fourTuple.DestIp, fourTuple.SourcePort, fourTuple.DestPort, 1, 1, header.TCPFlagSyn|header.TCPFlagAck, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -242,13 +241,8 @@ func Callback_TCP(msg []byte, source netip.Addr, dest netip.Addr, ttl int) {
 		}
 		if connection.State == state.SYN_SENT {
 			connection.State = state.ESTABLISHED
-			bytes, err := pkgUtils.Marshal(*c)
-			if err != nil {
-				fmt.Println("Err")
-				return
-			}
 
-			err = sendTCPPacket(c.SourceIp, c.DestIp, c.SourcePort, c.DestPort, 2, 3, header.TCPFlagAck, bytes)
+			err := sendTCPPacket(c.SourceIp, c.DestIp, c.SourcePort, c.DestPort, 2, 3, header.TCPFlagAck, nil)
 			if err != nil {
 				fmt.Println("Err")
 				return
@@ -257,21 +251,9 @@ func Callback_TCP(msg []byte, source netip.Addr, dest netip.Addr, ttl int) {
 		}
 		//handle this in milestone 2
 		connection.LastSeen = int16(tcpHdr.AckNum)
-		// detect wraparound
-		if connection.Head+int16(len(tcpPayload)) > int16(bufsize) { // yes wraparound
-			fmt.Println("wraparoudn in callback")
-			secondChunkSize := connection.Head + int16(len(tcpPayload)) - int16(bufsize)
-			firstChunkSize := int16(bufsize) - connection.Head
-			connection.RecieveBuffer = append(connection.RecieveBuffer, tcpPayload[:firstChunkSize]...)
-			copy(connection.RecieveBuffer[:secondChunkSize], tcpPayload[firstChunkSize:])
 
-		} else { // no wraparaound
-			fmt.Println("no wrap in callback")
-			connection.RecieveBuffer = append(connection.RecieveBuffer, tcpPayload...)
-		}
+		connection.receiveBuf.Write(tcpPayload)
 
-		fmt.Println("buffer in callback: ", connection.RecieveBuffer)
-		return
 	}
 
 	// IF DOES NOT EXIST:
@@ -301,10 +283,12 @@ func VConnect(addr netip.Addr, port int16) (*pkgUtils.VTCPConn, error) {
 	if err != nil {
 		return nil, err
 	}
+	fmt.Println("len bufsize: ", int16(bufsize))
 
 	connectionTable[*c] = &TCPMetadata{
-		TCB:        make([]byte, bufsize),
-		RecieveBuffer: make([]byte,bufsize)
+		sendBuf:    buf.Buffer{Head: 0, Len: int16(bufsize), Arr: make([]byte, 0)},
+		receiveBuf: buf.Buffer{Head: 0, Len: int16(bufsize), Arr: make([]byte, 0)},
+
 		isReceiver: false,
 		LastSeen:   0,
 		Next:       0,
@@ -352,6 +336,7 @@ func VSend(entry int16, message string) error {
 }
 
 func VRead(entry int16, bytesToRead int16) error {
+	fmt.Println("start of vread")
 	orderStruct := fourtupleOrder[entry]
 
 	if orderStruct.VConn == nil {
@@ -360,27 +345,18 @@ func VRead(entry int16, bytesToRead int16) error {
 	}
 
 	metadata := connectionTable[*orderStruct.VConn]
+	fmt.Println("buffer contents in vread ", metadata.receiveBuf)
+	fmt.Println("before buf func")
+	dataRead := metadata.receiveBuf.Read(bytesToRead)
+	fmt.Println("after buf func")
 
-	if len(metadata.RecieveBuffer) < int(bytesToRead) {
-		return fmt.Errorf("not enough data in buffer to read %d bytes", bytesToRead)
-	}
+	// TODO: FIX
+	// if len(metadata.TCB) < int(bytesToRead) {
+	// 	return fmt.Errorf("not enough data in buffer to read %d bytes", bytesToRead)
+	// }
 
-	var dataToRead []byte
-	// detect wraparound; potentially off by 1
-	if metadata.Head+bytesToRead <= int16(bufsize) { // there is no wraparound
-		fmt.Println("no wraparound. metadata head: ", metadata.Head)
-		fmt.Println("bytes to read ", bytesToRead)
-		end := metadata.Head + bytesToRead
-		dataToRead = metadata.RecieveBuffer[metadata.Head:end]
-	} else { // there is a wraparound
-		fmt.Println("wraparound")
-		dataToRead = metadata.RecieveBuffer[metadata.Head:] // first chunk: head to end of buffer
-		diff := metadata.Head + bytesToRead - int16(bufsize)
-		dataToRead = append(dataToRead, metadata.RecieveBuffer[:diff]...) // append second chunk (starting from beginning of buffer)
-	}
-
-	fmt.Println("data as bytes: ", dataToRead)
-	fmt.Printf("Read %d bytes: %s\n", bytesToRead, string(dataToRead))
+	fmt.Println("data as bytes: ", dataRead)
+	fmt.Printf("Read %d bytes: %s\n", bytesToRead, string(dataRead))
 
 	//metadata.TCB = metadata.TCB[bytesToRead:]
 	metadata.Head += bytesToRead

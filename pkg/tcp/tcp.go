@@ -182,8 +182,9 @@ func ACommand(port int16) {
 
 func (*VListener) VAccept(fourTuple pkgUtils.VTCPConn) (*pkgUtils.VTCPConn, error) {
 	connectionTable[fourTuple] = &TCPMetadata{
-		sendBuf:    buf.Buffer{Head: 0, Len: int16(bufsize), Arr: make([]byte, bufsize)},
-		receiveBuf: buf.Buffer{Head: 0, Len: int16(bufsize), Arr: make([]byte, bufsize)},
+		sendBuf:    buf.Buffer{Head: 0, Len: int16(bufsize), Arr: make([]byte, 0)},
+		receiveBuf: buf.Buffer{Head: 0, Len: int16(bufsize), Arr: make([]byte, 0)},
+
 		isReceiver: true,
 		LastSeen:   0,
 		Next:       0,
@@ -192,12 +193,7 @@ func (*VListener) VAccept(fourTuple pkgUtils.VTCPConn) (*pkgUtils.VTCPConn, erro
 	}
 	fourtupleOrder = append(fourtupleOrder, OrderInfo{0, &fourTuple}) // Assuming `fourTuple` is a value
 
-	bytes, err := pkgUtils.Marshal(fourTuple)
-	if err != nil {
-		return nil, err
-	}
-
-	err = sendTCPPacket(fourTuple.SourceIp, fourTuple.DestIp, fourTuple.SourcePort, fourTuple.DestPort, 1, 1, header.TCPFlagSyn|header.TCPFlagAck, bytes)
+	err := sendTCPPacket(fourTuple.SourceIp, fourTuple.DestIp, fourTuple.SourcePort, fourTuple.DestPort, 1, 1, header.TCPFlagSyn|header.TCPFlagAck, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -245,13 +241,8 @@ func Callback_TCP(msg []byte, source netip.Addr, dest netip.Addr, ttl int) {
 		}
 		if connection.State == state.SYN_SENT {
 			connection.State = state.ESTABLISHED
-			bytes, err := pkgUtils.Marshal(*c)
-			if err != nil {
-				fmt.Println("Err")
-				return
-			}
 
-			err = sendTCPPacket(c.SourceIp, c.DestIp, c.SourcePort, c.DestPort, 2, 3, header.TCPFlagAck, bytes)
+			err := sendTCPPacket(c.SourceIp, c.DestIp, c.SourcePort, c.DestPort, 2, 3, header.TCPFlagAck, nil)
 			if err != nil {
 				fmt.Println("Err")
 				return
@@ -295,8 +286,9 @@ func VConnect(addr netip.Addr, port int16) (*pkgUtils.VTCPConn, error) {
 	fmt.Println("len bufsize: ", int16(bufsize))
 
 	connectionTable[*c] = &TCPMetadata{
-		sendBuf:    buf.Buffer{Head: 0, Len: int16(bufsize), Arr: make([]byte, bufsize)},
-		receiveBuf: buf.Buffer{Head: 0, Len: int16(bufsize), Arr: make([]byte, bufsize)},
+		sendBuf:    buf.Buffer{Head: 0, Len: int16(bufsize), Arr: make([]byte, 0)},
+		receiveBuf: buf.Buffer{Head: 0, Len: int16(bufsize), Arr: make([]byte, 0)},
+
 		isReceiver: false,
 		LastSeen:   0,
 		Next:       0,
@@ -357,6 +349,13 @@ func VRead(entry int16, bytesToRead int16) error {
 	fmt.Println("before buf func")
 	dataRead := metadata.receiveBuf.Read(bytesToRead)
 	fmt.Println("after buf func")
+
+	// TODO: FIX
+	// if len(metadata.TCB) < int(bytesToRead) {
+	// 	return fmt.Errorf("not enough data in buffer to read %d bytes", bytesToRead)
+	// }
+
+	dataRead := metadata.receiveBuf.Read(bytesToRead)
 
 	fmt.Println("data as bytes: ", dataRead)
 	fmt.Printf("Read %d bytes: %s\n", bytesToRead, string(dataRead))

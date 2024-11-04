@@ -40,15 +40,16 @@ func (b *Buffer) Read(numBytes int16) (data []byte) {
 	fmt.Println("b.Len ", b.Len)
 
 	// detect wraparound; potentially off by 1
-	if b.Head+numBytes <= b.Len { // there is no wraparound
-		fmt.Println("no wraparound. metadata head: ", b.Head)
+	if b.LastRead+numBytes <= b.Len { // there is no wraparound
+		// fmt.Println("no wraparound. metadata head: ", b.Head)
 		fmt.Println("bytes to read ", numBytes)
-		end := b.Head + numBytes
-		data = b.Arr[b.Head:end]
+		end := b.LastRead + numBytes
+		data = b.Arr[b.LastRead:end]
 	} else { // there is a wraparound
 		fmt.Println("wraparound")
-		data = b.Arr[b.Head:] // first chunk: head to end of buffer
-		diff := b.Head + numBytes - b.Len
+		data = b.Arr[b.LastRead:] // first chunk: head to end of buffer
+		diff := b.LastRead + numBytes - b.Len
+
 		data = append(data, b.Arr[:diff]...) // append second chunk (starting from beginning of buffer)
 	}
 	b.LastRead += numBytes

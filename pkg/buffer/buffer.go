@@ -49,6 +49,7 @@ func (b *Buffer) Read(numBytes int16) (data []byte) {
 		fmt.Println("wraparound")
 		data = b.Arr[b.LastRead:] // first chunk: head to end of buffer
 		diff := b.LastRead + numBytes - b.Len
+
 		data = append(data, b.Arr[:diff]...) // append second chunk (starting from beginning of buffer)
 	}
 	b.LastRead += numBytes

@@ -355,8 +355,6 @@ func VRead(entry int16, bytesToRead int16) error {
 	// 	return fmt.Errorf("not enough data in buffer to read %d bytes", bytesToRead)
 	// }
 
-	dataRead := metadata.receiveBuf.Read(bytesToRead)
-
 	fmt.Println("data as bytes: ", dataRead)
 	fmt.Printf("Read %d bytes: %s\n", bytesToRead, string(dataRead))
 

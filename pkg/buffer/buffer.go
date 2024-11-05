@@ -9,47 +9,51 @@ type Buffer struct {
 	Len      int16
 	Head     int16
 	LastRead int16
+	WindowSize int16
 }
 
 func (b *Buffer) Write(data []byte) {
+	dataLen := int16(len(data))
 
-	fmt.Println("data ", string(data))
-	fmt.Println("b.Head ", b.Head)
-	fmt.Println("b.Len ", b.Len)
+	// Determine how many bytes we can actually write
+	bytesToWrite := dataLen
 
-	// detect wraparound
-	if b.Head+int16(len(data)) > b.Len { // yes wraparound
-		fmt.Println("wraparound in callback")
-		secondChunkSize := b.Head + int16(len(data)) - b.Len
+	// Write data directly, handling wraparound
+	endIndex := b.Head + bytesToWrite
+	if endIndex <= b.Len { // No wraparound
+		copy(b.Arr[b.Head:endIndex], data[:bytesToWrite])
+	} else { // Wraparound
 		firstChunkSize := b.Len - b.Head
-		b.Arr = append(b.Arr, data[:firstChunkSize]...)
-		copy(b.Arr[:secondChunkSize], data[firstChunkSize:])
-	} else { // no wraparaound
-		fmt.Println("no wrap in callback")
-		b.Arr = append(b.Arr, data...)
+		copy(b.Arr[b.Head:], data[:firstChunkSize])
+		copy(b.Arr[:endIndex%b.Len], data[firstChunkSize:])
 	}
 
-	b.Head += int16(len(data))
-	b.Head = b.Head % b.Len
-	fmt.Println("buffer in write: ", b.Arr)
+	b.Head = (b.Head + bytesToWrite) % b.Len
 }
 
 func (b *Buffer) Read(numBytes int16) (data []byte) {
-	fmt.Println("numBytes ", numBytes)
-	fmt.Println("b.Head ", b.Head)
-	fmt.Println("b.Len ", b.Len)
-
+	//TODO: this only solves one wrap arround fix it (?)
 	// detect wraparound; potentially off by 1
+
+	var maxBytes int16
+	if b.LastRead < b.Head {
+		maxBytes = b.Head - b.LastRead
+	} else { // Wraparound case
+		maxBytes = b.Len - b.LastRead + b.Head
+	}
+	
+	// Limit numBytes to not exceed maxBytes
+	if numBytes > maxBytes {
+		numBytes = maxBytes
+	}
+
 	if b.LastRead+numBytes <= b.Len { // there is no wraparound
 		// fmt.Println("no wraparound. metadata head: ", b.Head)
-		fmt.Println("bytes to read ", numBytes)
 		end := b.LastRead + numBytes
 		data = b.Arr[b.LastRead:end]
 	} else { // there is a wraparound
-		fmt.Println("wraparound")
 		data = b.Arr[b.LastRead:] // first chunk: head to end of buffer
 		diff := b.LastRead + numBytes - b.Len
-
 		data = append(data, b.Arr[:diff]...) // append second chunk (starting from beginning of buffer)
 	}
 	b.LastRead += numBytes

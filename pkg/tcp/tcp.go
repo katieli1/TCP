@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/google/netstack/tcpip/header"
+	//"github.com/google/netstack/tcpip/seqnum"
 )
 
 // TODO: fix seq / ack numbers (rename Syn), add second buffer (for receiver) to TCPMetadata, separate out buffer logic into library
@@ -23,10 +24,8 @@ import (
 type TCPMetadata struct {
 	sendBuf    buf.Buffer
 	receiveBuf buf.Buffer
-	isReceiver bool
-	LastSeen   int16
-	Next       int16
-	Head       int16
+	Seq        int16
+	Ack        int16
 	State      state.TCPState
 }
 type VListener struct {
@@ -184,11 +183,6 @@ func (*VListener) VAccept(fourTuple pkgUtils.VTCPConn) (*pkgUtils.VTCPConn, erro
 	connectionTable[fourTuple] = &TCPMetadata{
 		sendBuf:    buf.Buffer{Head: 0, Len: int16(bufsize), Arr: make([]byte, 0)},
 		receiveBuf: buf.Buffer{Head: 0, Len: int16(bufsize), Arr: make([]byte, 0)},
-
-		isReceiver: true,
-		LastSeen:   0,
-		Next:       0,
-		Head:       0,
 		State:      state.SYN_RECEIVED,
 	}
 	fourtupleOrder = append(fourtupleOrder, OrderInfo{0, &fourTuple}) // Assuming `fourTuple` is a value
@@ -234,7 +228,6 @@ func Callback_TCP(msg []byte, source netip.Addr, dest netip.Addr, ttl int) {
 	connection, exists := connectionTable[*c]
 
 	if exists {
-		fmt.Println("head at start of callback: ", connection.Head)
 		if connection.State == state.SYN_RECEIVED {
 			connection.State = state.ESTABLISHED
 			return
@@ -250,10 +243,11 @@ func Callback_TCP(msg []byte, source netip.Addr, dest netip.Addr, ttl int) {
 			return
 		}
 		//handle this in milestone 2
-		connection.LastSeen = int16(tcpHdr.AckNum)
+		//connection.LastSeen = int16(tcpHdr.AckNum)
 
 		connection.receiveBuf.Write(tcpPayload)
 
+		// TODO: send an ack here
 	}
 
 	// IF DOES NOT EXIST:
@@ -279,7 +273,13 @@ func VConnect(addr netip.Addr, port int16) (*pkgUtils.VTCPConn, error) {
 		DestPort:   port,
 	}
 
-	err = sendTCPPacket(sourceIp, addr, int16(randomPort), port, 1, 0, header.TCPFlagSyn, nil)
+	rand.Seed(time.Now().UnixNano())
+	min := 1024
+	max := 9998
+
+	randomSeq := rand.Intn(max-min+1) + min
+
+	err = sendTCPPacket(sourceIp, addr, int16(randomPort), port, int16(randomSeq), 0, header.TCPFlagSyn, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -288,11 +288,6 @@ func VConnect(addr netip.Addr, port int16) (*pkgUtils.VTCPConn, error) {
 	connectionTable[*c] = &TCPMetadata{
 		sendBuf:    buf.Buffer{Head: 0, Len: int16(bufsize), Arr: make([]byte, 0)},
 		receiveBuf: buf.Buffer{Head: 0, Len: int16(bufsize), Arr: make([]byte, 0)},
-
-		isReceiver: false,
-		LastSeen:   0,
-		Next:       0,
-		Head:       0,
 		State:      state.SYN_SENT,
 	}
 	fourtupleOrder = append(fourtupleOrder, OrderInfo{0, c})
@@ -311,19 +306,17 @@ func VSend(entry int16, message string) error {
 	metadata := connectionTable[*orderStruct.VConn]
 
 	bytesMessage := []byte(message)
-	metadata.Next += int16(len(message))
 
-	seqNum := metadata.Next
-	fmt.Println("seqnum ", seqNum)
-	ackNum := metadata.LastSeen
+	fmt.Println("seqnum ", metadata.Seq)
+	metadata.Ack = metadata.sendBuf.GetLastRead()
 
 	err := sendTCPPacket(
 		orderStruct.VConn.SourceIp,
 		orderStruct.VConn.DestIp,
 		orderStruct.VConn.SourcePort,
 		orderStruct.VConn.DestPort,
-		seqNum,
-		ackNum,
+		metadata.Seq,
+		metadata.Ack,
 		header.TCPFlagSyn|header.TCPFlagAck,
 		bytesMessage,
 	)
@@ -359,9 +352,6 @@ func VRead(entry int16, bytesToRead int16) error {
 	fmt.Printf("Read %d bytes: %s\n", bytesToRead, string(dataRead))
 
 	//metadata.TCB = metadata.TCB[bytesToRead:]
-	metadata.Head += bytesToRead
-
-	metadata.Head = metadata.Head % int16(bufsize)
 
 	// connectionTable[*orderStruct.VConn] = metadata
 

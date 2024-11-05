@@ -59,3 +59,7 @@ func (b *Buffer) Read(numBytes int16) (data []byte) {
 	fmt.Printf("Read %d bytes: %s\n", numBytes, string(data))
 	return data
 }
+
+func (b *Buffer) GetLastRead() int16 {
+	return b.LastRead
+}

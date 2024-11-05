@@ -28,9 +28,15 @@ type TCPMetadata struct {
 	Ack        int16
 	State      state.TCPState
 }
+type VAcceptInfo struct {
+	Conn *pkgUtils.VTCPConn
+	Ack int16
+	Seq int16
+}
+
 type VListener struct {
 	Port int16
-	Chan chan (*pkgUtils.VTCPConn)
+	Chan chan (*VAcceptInfo)
 }
 type OrderInfo struct {
 	Port  int16
@@ -161,7 +167,7 @@ func repl() {
 }
 
 func VListen(port int16) *VListener {
-	return &VListener{Port: port, Chan: make(chan *pkgUtils.VTCPConn)}
+	return &VListener{Port: port, Chan: make(chan *VAcceptInfo)}
 }
 
 func ACommand(port int16) {
@@ -169,25 +175,32 @@ func ACommand(port int16) {
 	listenerTable[port] = listenConn
 	fourtupleOrder = append(fourtupleOrder, OrderInfo{port, nil})
 	for {
-		fourTuple, ok := <-listenConn.Chan
+		VAcceptInfo, ok := <-listenConn.Chan
 		if !ok {
 			fmt.Println("failed")
 		}
 		fmt.Println("send accept now")
-		clientConn, err := listenConn.VAccept(*fourTuple)
+		clientConn, err := listenConn.VAccept(*VAcceptInfo)
 		fmt.Println("send accept now", clientConn, err)
 	}
 }
 
-func (*VListener) VAccept(fourTuple pkgUtils.VTCPConn) (*pkgUtils.VTCPConn, error) {
+func (*VListener) VAccept(vAcceptInfo VAcceptInfo) (*pkgUtils.VTCPConn, error) {
+	fourTuple := *vAcceptInfo.Conn
 	connectionTable[fourTuple] = &TCPMetadata{
 		sendBuf:    buf.Buffer{Head: 0, Len: int16(bufsize), Arr: make([]byte, 0)},
 		receiveBuf: buf.Buffer{Head: 0, Len: int16(bufsize), Arr: make([]byte, 0)},
+		Seq:vAcceptInfo.Ack,
+		Ack:vAcceptInfo.Seq+1,
 		State:      state.SYN_RECEIVED,
 	}
 	fourtupleOrder = append(fourtupleOrder, OrderInfo{0, &fourTuple}) // Assuming `fourTuple` is a value
+	rand.Seed(time.Now().UnixNano())
+	min := 1024
+	max := 9998
 
-	err := sendTCPPacket(fourTuple.SourceIp, fourTuple.DestIp, fourTuple.SourcePort, fourTuple.DestPort, 1, 1, header.TCPFlagSyn|header.TCPFlagAck, nil)
+	randomSeq := rand.Intn(max-min+1) + min
+	err := sendTCPPacket(fourTuple.SourceIp, fourTuple.DestIp, fourTuple.SourcePort, fourTuple.DestPort, int16(randomSeq), vAcceptInfo.Seq+1, header.TCPFlagSyn|header.TCPFlagAck, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -232,10 +245,13 @@ func Callback_TCP(msg []byte, source netip.Addr, dest netip.Addr, ttl int) {
 			connection.State = state.ESTABLISHED
 			return
 		}
+		connection.Seq = int16(tcpHdr.AckNum)
+		connection.Ack = int16(tcpHdr.SeqNum)
 		if connection.State == state.SYN_SENT {
 			connection.State = state.ESTABLISHED
-
-			err := sendTCPPacket(c.SourceIp, c.DestIp, c.SourcePort, c.DestPort, 2, 3, header.TCPFlagAck, nil)
+			connection.Seq = int16(tcpHdr.AckNum)
+			connection.Ack = int16(tcpHdr.SeqNum+1)
+			err := sendTCPPacket(c.SourceIp, c.DestIp, c.SourcePort, c.DestPort, connection.Seq, connection.Ack, header.TCPFlagAck, nil)
 			if err != nil {
 				fmt.Println("Err")
 				return
@@ -244,18 +260,27 @@ func Callback_TCP(msg []byte, source netip.Addr, dest netip.Addr, ttl int) {
 		}
 		//handle this in milestone 2
 		//connection.LastSeen = int16(tcpHdr.AckNum)
-
-		connection.receiveBuf.Write(tcpPayload)
-
 		// TODO: send an ack here
+		if len(tcpPayload) != 0 {
+			connection.receiveBuf.Write(tcpPayload)
+			connection.Ack = int16(tcpHdr.SeqNum) + int16(len(tcpPayload))
+			err := sendTCPPacket(c.SourceIp, c.DestIp, c.SourcePort, c.DestPort, connection.Seq, connection.Ack, header.TCPFlagAck, nil)
+			if err != nil {
+				fmt.Println("Err")
+				return
+			}
+		}else{
+			//update variables for ack
+			connection.Seq = int16(tcpHdr.AckNum)
+		}
+		return
 	}
 
 	// IF DOES NOT EXIST:
 	port := tcpHdr.DstPort
 	listenConn, exists := listenerTable[int16(port)]
 	if exists {
-		fmt.Println("exists")
-		listenConn.Chan <- c
+		listenConn.Chan <- &VAcceptInfo{Conn: c, Seq: int16(tcpHdr.SeqNum), Ack: int16(tcpHdr.AckNum)}
 	}
 }
 
@@ -308,8 +333,8 @@ func VSend(entry int16, message string) error {
 	bytesMessage := []byte(message)
 
 	fmt.Println("seqnum ", metadata.Seq)
-	metadata.Ack = metadata.sendBuf.GetLastRead()
-
+	// metadata.Ack = metadata.sendBuf.GetLastRead()
+	//update sender buffer with the information we are sending and then deleting that when we get an ack
 	err := sendTCPPacket(
 		orderStruct.VConn.SourceIp,
 		orderStruct.VConn.DestIp,
@@ -317,7 +342,7 @@ func VSend(entry int16, message string) error {
 		orderStruct.VConn.DestPort,
 		metadata.Seq,
 		metadata.Ack,
-		header.TCPFlagSyn|header.TCPFlagAck,
+		header.TCPFlagAck,
 		bytesMessage,
 	)
 
@@ -367,7 +392,7 @@ func sendTCPPacket(srcIp, destIp netip.Addr, srcPort, destPort, Seq, Ack int16, 
 		AckNum:        uint32(Ack),
 		DataOffset:    20,
 		Flags:         flags,
-		WindowSize:    65535,
+		WindowSize:    uint16(65535-len(data)),
 		Checksum:      0,
 		UrgentPointer: 0,
 	}

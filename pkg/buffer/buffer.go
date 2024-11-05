@@ -39,6 +39,7 @@ func (b *Buffer) Write(data []byte) {
 		fmt.Println("setting b.Full to true")
 		b.Full = true
 	}
+	b.WindowSize -= int16(len(data))
 }
 
 func (b *Buffer) Read(numBytes int16) (data []byte) {
@@ -89,6 +90,8 @@ func (b *Buffer) Read(numBytes int16) (data []byte) {
 
 	fmt.Println("head pos at end of read: ", b.Head)
 	fmt.Println("lastread pos at end of read: ", b.LastRead)
+
+	b.WindowSize += int16(min(int16(len(data)), b.Len))
 	return data
 }
 

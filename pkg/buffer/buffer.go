@@ -43,7 +43,6 @@ func (b *Buffer) Write(data []byte) {
 }
 
 func (b *Buffer) Read(numBytes int16) (data []byte) {
-	//TODO: this only solves one wrap arround fix it (?)
 	// detect wraparound; potentially off by 1
 
 	var maxBytes int16
@@ -85,11 +84,11 @@ func (b *Buffer) Read(numBytes int16) (data []byte) {
 		b.Full = false
 	}
 
-	fmt.Println("data as bytes: ", data)
-	fmt.Printf("Read %d bytes: %s\n", numBytes, string(data))
+	// fmt.Println("data as bytes: ", data)
+	// fmt.Printf("Read %d bytes: %s\n", numBytes, string(data))
 
-	fmt.Println("head pos at end of read: ", b.Head)
-	fmt.Println("lastread pos at end of read: ", b.LastRead)
+	// fmt.Println("head pos at end of read: ", b.Head)
+	// fmt.Println("lastread pos at end of read: ", b.LastRead)
 
 	b.WindowSize += int16(min(int16(len(data)), b.Len))
 	return data

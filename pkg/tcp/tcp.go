@@ -160,7 +160,13 @@ func repl() {
 				continue
 			}
 
-			VRead(int16(port), int16(bytesToRead))
+			buffer := make([]byte, bytesToRead) 
+			err = VRead(int16(port), buffer) 
+			if err != nil {
+				// Handle error
+			}
+			fmt.Printf("Read %d bytes: %s\n", len(buffer), string(buffer))
+			
 		} else {
 			fmt.Println("Invalid command. Valid commands include li, ln, lr, up <ifname>, down <ifname>, send <addr> <message ...>, and q to quit.")
 		}
@@ -373,44 +379,38 @@ func VSend(entry int16, message string) error {
 	return nil
 }
 
-func VRead(entry int16, bytesToRead int16) ([]byte, error) {
+func VRead(entry int16, buffer []byte) error {
 	orderStruct := fourtupleOrder[entry]
 
 	if orderStruct.VConn == nil {
 		// Cannot send message to a listener entry
-		return nil, fmt.Errorf("cannot send message: listener entry")
+		return fmt.Errorf("cannot send message: listener entry")
 	}
 	c := orderStruct.VConn
 
 	metadata := connectionTable[*orderStruct.VConn]
 
-	wasFull := false
-	if metadata.receiveBuf.WindowSize == 0 {
-		wasFull = true
-	}
-	dataRead := metadata.receiveBuf.Read(bytesToRead)
-	if wasFull && len(dataRead) != 0 { // was full but now it's not, so send an ack
-		err := sendTCPPacket(c.SourceIp, c.DestIp, c.SourcePort, c.DestPort, metadata.Seq, metadata.Ack, header.TCPFlagAck, nil, uint16(metadata.receiveBuf.WindowSize))
+	wasFull := metadata.receiveBuf.WindowSize == 0
+
+	// Read data into a temporary slice of the requested size
+	dataRead := metadata.receiveBuf.Read(int16(len(buffer)))
+	copy(buffer, dataRead) // Copy dataRead into the provided buffer
+
+	// If the buffer was full and we've read data, send an ACK
+	if wasFull && len(dataRead) != 0 {
+		err := sendTCPPacket(
+			c.SourceIp, c.DestIp, c.SourcePort, c.DestPort,
+			metadata.Seq, metadata.Ack, header.TCPFlagAck, nil,
+			uint16(metadata.receiveBuf.WindowSize),
+		)
 		if err != nil {
-			return nil, err
+			return err
 		}
 	}
-	// metadata.receiveBuf.WindowSize += int16(min(int16(len(dataRead)),metadata.receiveBuf.Len))
 
-	// TODO: FIX
-	// if len(metadata.TCB) < int(bytesToRead) {
-	// 	return fmt.Errorf("not enough data in buffer to read %d bytes", bytesToRead)
-	// }
-
-	// fmt.Println("data as bytes: ", dataRead)
-	// fmt.Printf("Read %d bytes: %s\n", bytesToRead, string(dataRead))
-
-	//metadata.TCB = metadata.TCB[bytesToRead:]
-
-	// connectionTable[*orderStruct.VConn] = metadata
-
-	return dataRead, nil
+	return nil
 }
+
 
 func sendTCPPacket(srcIp, destIp netip.Addr, srcPort, destPort, Seq, Ack int16, flags uint8, data []byte, WindowSize uint16) error {
 

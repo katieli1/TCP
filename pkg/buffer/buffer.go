@@ -35,6 +35,7 @@ func (b *Buffer) Write(data []byte) {
 	}
 
 	b.Head = (b.Head + bytesToWrite) % b.Len
+	fmt.Println("updating head to ", b.Head)
 	if b.Head == b.LastRead {
 		fmt.Println("setting b.Full to true")
 		b.Full = true

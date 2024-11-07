@@ -7,6 +7,7 @@ import (
 	"ip/pkg/iptcp_utils"
 	"ip/pkg/lookup"
 	"ip/pkg/pkgUtils"
+	s "ip/pkg/send-buffer"
 	state "ip/pkg/tcp_states"
 	"math/rand"
 	"net/netip"
@@ -19,10 +20,8 @@ import (
 	//"github.com/google/netstack/tcpip/seqnum"
 )
 
-// TODO: separate out buffer logic into library
-
 type TCPMetadata struct {
-	sendBuf    buf.Buffer
+	sendBuf    s.SendBuf
 	receiveBuf buf.Buffer
 	Seq        int16
 	Ack        int16
@@ -187,7 +186,7 @@ func ACommand(port int16) {
 func (*VListener) VAccept(vAcceptInfo VAcceptInfo) (*pkgUtils.VTCPConn, error) {
 	fourTuple := *vAcceptInfo.Conn
 	connectionTable[fourTuple] = &TCPMetadata{
-		sendBuf:    buf.Buffer{Head: 0, Len: int16(bufsize), Arr: make([]byte, bufsize), WindowSize: int16(bufsize)},
+		sendBuf:    s.SendBuf{Buf: buf.Buffer{Head: 0, Len: int16(bufsize), Arr: make([]byte, bufsize), WindowSize: int16(bufsize)}, UNA: 0},
 		receiveBuf: buf.Buffer{Head: 0, Len: int16(bufsize), Arr: make([]byte, bufsize), WindowSize: int16(bufsize)},
 		Seq:        vAcceptInfo.Ack,
 		Ack:        vAcceptInfo.Seq + 1,
@@ -280,7 +279,9 @@ func Callback_TCP(msg []byte, source netip.Addr, dest netip.Addr, ttl int) {
 			//update variables for ack
 			//Todo, not use read but instead update the sender buffer with the new last send, next ....
 			connection.sendBuf.Read(int16(tcpHdr.AckNum) - connection.Seq)
+			connection.sendBuf.UpdateUNA(int16(tcpHdr.AckNum) - connection.Seq)
 			connection.Seq = int16(tcpHdr.AckNum)
+
 			// connection.sendBuf.WindowSize = int16(tcpHdr.WindowSize)
 		}
 		return
@@ -320,7 +321,7 @@ func VConnect(addr netip.Addr, port int16) (*pkgUtils.VTCPConn, error) {
 	}
 
 	connectionTable[*c] = &TCPMetadata{
-		sendBuf:    buf.Buffer{Head: 0, Len: int16(bufsize), Arr: make([]byte, bufsize), WindowSize: int16(bufsize)},
+		sendBuf:    s.SendBuf{Buf: buf.Buffer{Head: 0, Len: int16(bufsize), Arr: make([]byte, bufsize), WindowSize: int16(bufsize)}, UNA: 0},
 		receiveBuf: buf.Buffer{Head: 0, Len: int16(bufsize), Arr: make([]byte, bufsize), WindowSize: int16(bufsize)},
 		State:      state.SYN_SENT,
 		Window:     int16(bufsize),
@@ -347,11 +348,11 @@ func VSend(entry int16, message string) error {
 		return nil
 	}
 
-	if int16(len(bytesMessage)) > metadata.sendBuf.WindowSize {
-		bytesMessage = bytesMessage[:metadata.sendBuf.WindowSize]
+	if int16(len(bytesMessage)) > metadata.sendBuf.Buf.WindowSize {
+		bytesMessage = bytesMessage[:metadata.sendBuf.Buf.WindowSize]
 	}
 	metadata.sendBuf.Write(bytesMessage)
-	fmt.Println("WindowSize: ", metadata.sendBuf.WindowSize)
+	fmt.Println("WindowSize: ", metadata.sendBuf.Buf.WindowSize)
 	// metadata.Ack = metadata.sendBuf.GetLastRead()
 	//update sender buffer with the information we are sending and then deleting that when we get an ack
 	err := sendTCPPacket(
@@ -363,7 +364,7 @@ func VSend(entry int16, message string) error {
 		metadata.Ack,
 		header.TCPFlagAck,
 		bytesMessage,
-		uint16(metadata.sendBuf.WindowSize),
+		uint16(metadata.sendBuf.Buf.WindowSize),
 	)
 
 	if err != nil {
@@ -384,12 +385,12 @@ func VRead(entry int16, bytesToRead int16) ([]byte, error) {
 
 	metadata := connectionTable[*orderStruct.VConn]
 
-	wasFull := false
-	if metadata.receiveBuf.WindowSize == 0 {
-		wasFull = true
-	}
+	// wasFull := false
+	// if metadata.receiveBuf.WindowSize == 0 {
+	// 	wasFull = true
+	// }
 	dataRead := metadata.receiveBuf.Read(bytesToRead)
-	if wasFull && len(dataRead) != 0 { // was full but now it's not, so send an ack
+	if len(dataRead) != 0 { // was full but now it's not, so send an ack
 		err := sendTCPPacket(c.SourceIp, c.DestIp, c.SourcePort, c.DestPort, metadata.Seq, metadata.Ack, header.TCPFlagAck, nil, uint16(metadata.receiveBuf.WindowSize))
 		if err != nil {
 			return nil, err

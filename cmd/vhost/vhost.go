@@ -11,5 +11,5 @@ func main() {
 	lookup.RegisterRecvHandler(0, lookup.Callback_test)
 	lookup.RegisterRecvHandler(6, tcp.Callback_TCP)
 	tcp.Initialize(fileName)
-
+	tcp.REPL()
 }

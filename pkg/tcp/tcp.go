@@ -1,7 +1,6 @@
 package tcp
 
 import (
-	"bufio"
 	"fmt"
 	buf "ip/pkg/buffer"
 	"ip/pkg/iptcp_utils"
@@ -11,9 +10,7 @@ import (
 	state "ip/pkg/tcp_states"
 	"math/rand"
 	"net/netip"
-	"os"
-	"strconv"
-	"strings"
+
 	"time"
 
 	"github.com/google/netstack/tcpip/header"
@@ -52,144 +49,17 @@ var sid = 0
 
 func Initialize(fileName string) {
 	go lookup.Initialize(fileName)
-
-	done := make(chan struct{})
-	go func() {
-		repl()
-		close(done)
-	}()
-
-	<-done
-}
-
-func repl() {
-
-	fmt.Println("Welcome to the CLI! Valid commands include li, ln, lr, up <ifname>, down <ifname>, send <addr> <message ...>, and q to quit.")
-	reader := bufio.NewReader(os.Stdin)
-	for {
-		input, _ := reader.ReadString('\n')
-		input = strings.TrimSpace(input)
-
-		words := strings.Fields(input)
-
-		if input == "q" { // quit
-			break
-		} else if words[0] == "a" { // listen and accept on a port
-			port := words[1]
-
-			num, err := strconv.ParseInt(port, 10, 16)
-			if err != nil {
-				fmt.Println("Error:", err)
-
-			} else {
-				go ACommand(int16(num))
-			}
-
-		} else if words[0] == "c" { // connect to a socket
-			ip, err := netip.ParseAddr(words[1])
-			if err != nil {
-				fmt.Println("Error:", err)
-
-			}
-			port, err := strconv.ParseInt(words[2], 10, 16)
-			if err != nil {
-				fmt.Println("Error:", err)
-
-			}
-			VConnect(ip, int16(port))
-
-		} else if words[0] == "s" { // send data using a socket
-			if len(words) < 3 {
-				fmt.Println("Usage: s <port> <message>")
-				continue
-			}
-			entry, err := strconv.ParseInt(words[1], 10, 16)
-			if err != nil {
-				fmt.Printf("Invalid entry: %s\n", words[1])
-				continue
-			}
-
-			message := strings.Join(words[2:], " ")
-
-			VSend(int16(entry), message)
-		} else if words[0] == "cl" { // close
-
-		} else if words[0] == "ls" {
-			fmt.Printf("%-10s %-15s %-10s %-15s %-10s %-10s\n", "SID", "LAddr", "LPort", "RAddr", "RPort", "Status")
-			for index, v := range fourtupleOrder {
-				if v.VConn != nil {
-					if result, exists := connectionTable[*v.VConn]; exists {
-						fmt.Printf("%-10d %-15s %-10s %-15s %-10s %-10s\n",
-							index,
-							v.VConn.SourceIp.String(),
-							strconv.Itoa(int(v.VConn.SourcePort)),
-							v.VConn.DestIp.String(),
-							strconv.Itoa(int(v.VConn.DestPort)),
-							result.State)
-					}
-				} else {
-					fmt.Printf("%-10d %-15s %-10s %-15s %-10s %-10s\n",
-						index,
-						"0.0.0.0",
-						strconv.Itoa(int(v.Port)),
-						"0.0.0.0",
-						"0",
-						"LISTEN")
-				}
-			}
-		} else if words[0] == "sf" {
-
-		} else if words[0] == "rf" {
-
-		} else if words[0] == "r" { // receive data on a socket
-			if len(words) < 3 {
-				fmt.Println("Usage: r <port> <bytes_to_read>")
-				continue
-			}
-
-			port, err := strconv.ParseInt(words[1], 10, 16)
-			if err != nil {
-				fmt.Printf("Invalid port number: %s\n", words[1])
-				continue
-			}
-
-			bytesToRead, err := strconv.ParseInt(words[2], 10, 16)
-			if err != nil {
-				fmt.Printf("Invalid bytes to read: %s\n", words[2])
-				continue
-			}
-
-			buffer := make([]byte, bytesToRead)
-			err = VRead(int16(port), buffer)
-			if err != nil {
-				// Handle error
-			}
-			fmt.Printf("Read %d bytes: %s\n", len(buffer), string(buffer))
-
-		} else {
-			fmt.Println("Invalid command. Valid commands include li, ln, lr, up <ifname>, down <ifname>, send <addr> <message ...>, and q to quit.")
-		}
-	}
 }
 
 func VListen(port int16) *VListener {
 	return &VListener{Port: port, Chan: make(chan *VAcceptInfo)}
 }
 
-func ACommand(port int16) {
-	listenConn := VListen(port)
-	listenerTable[port] = listenConn
-	fourtupleOrder = append(fourtupleOrder, OrderInfo{port, nil})
-	for {
-		VAcceptInfo, ok := <-listenConn.Chan
-		if !ok {
-			fmt.Println("failed")
-		}
-		_, _ = listenConn.VAccept(*VAcceptInfo)
+func (l *VListener) VAccept() (*pkgUtils.VTCPConn, error) {
+	vAcceptInfo, ok := <-l.Chan
+	if !ok {
+		fmt.Println("failed")
 	}
-}
-
-func (*VListener) VAccept(vAcceptInfo VAcceptInfo) (*pkgUtils.VTCPConn, error) {
 	fourTuple := *vAcceptInfo.Conn
 	connectionTable[fourTuple] = &TCPMetadata{
 		sendBuf:    s.SendBuf{Buf: buf.Buffer{Head: 0, Len: int16(bufsize), Arr: make([]byte, bufsize), WindowSize: int16(bufsize)}, UNA: 0},
@@ -208,6 +78,15 @@ func (*VListener) VAccept(vAcceptInfo VAcceptInfo) (*pkgUtils.VTCPConn, error) {
 	err := sendTCPPacket(fourTuple.SourceIp, fourTuple.DestIp, fourTuple.SourcePort, fourTuple.DestPort, int16(randomSeq), vAcceptInfo.Seq+1, header.TCPFlagSyn|header.TCPFlagAck, nil, uint16(bufsize))
 	if err != nil {
 		return nil, err
+	}
+
+	_, ok = <-l.Chan
+	if !ok {
+		fmt.Println("failed")
+	}
+	connection := connectionTable[fourTuple]
+	if connection.State == state.SYN_RECEIVED {
+		connection.State = state.ESTABLISHED
 	}
 
 	return nil, nil
@@ -246,10 +125,10 @@ func Callback_TCP(msg []byte, source netip.Addr, dest netip.Addr, ttl int) {
 	connection, exists := connectionTable[*c]
 
 	if exists {
-		if connection.State == state.SYN_RECEIVED {
-			connection.State = state.ESTABLISHED
-			return
-		}
+		// if connection.State == state.SYN_RECEIVED {
+		// 	connection.State = state.ESTABLISHED
+		// 	return
+		// }
 		connection.Ack = int16(tcpHdr.SeqNum)
 		if connection.State == state.SYN_SENT {
 			connection.State = state.ESTABLISHED
@@ -267,6 +146,15 @@ func Callback_TCP(msg []byte, source netip.Addr, dest netip.Addr, ttl int) {
 		// TODO: send an ack here
 		fmt.Println("updating window size")
 		connection.Window = int16(tcpHdr.WindowSize)
+
+		if tcpHdr.Flags == header.TCPFlagSyn || tcpHdr.Flags == header.TCPFlagSyn|header.TCPFlagAck {
+			port := tcpHdr.DstPort
+			listenConn, exists := listenerTable[int16(port)]
+			if exists {
+				fmt.Println("sending to channel for ack")
+				listenConn.Chan <- &VAcceptInfo{Conn: c, Seq: int16(tcpHdr.SeqNum), Ack: int16(tcpHdr.AckNum)}
+			}
+		}
 		if len(tcpPayload) != 0 {
 			connection.Seq = int16(tcpHdr.AckNum)
 			fmt.Println("Window Size Callback 1: ", connection.receiveBuf.WindowSize)

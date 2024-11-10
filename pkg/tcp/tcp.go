@@ -24,6 +24,7 @@ type TCPMetadata struct {
 	Ack        int16
 	Window     int16 // the other person's window size
 	State      state.TCPState
+	Chan       chan bool
 }
 type VAcceptInfo struct {
 	Conn *pkgUtils.VTCPConn
@@ -93,7 +94,7 @@ func (l *VListener) VAccept() (*pkgUtils.VTCPConn, error) {
 }
 
 func Callback_TCP(msg []byte, source netip.Addr, dest netip.Addr, ttl int) {
-
+	fmt.Println("in callback tcp")
 	// FOR VCONNECT:
 	// marshal into 4-tuple
 	tcpHeaderAndData := []byte(msg)
@@ -125,12 +126,17 @@ func Callback_TCP(msg []byte, source netip.Addr, dest netip.Addr, ttl int) {
 	connection, exists := connectionTable[*c]
 
 	if exists {
-		// if connection.State == state.SYN_RECEIVED {
-		// 	connection.State = state.ESTABLISHED
-		// 	return
-		// }
+		fmt.Println("exists")
+
+		if tcpHdr.Flags == header.TCPFlagSyn|header.TCPFlagAck { // this is a packet sent by a VAccept
+			fmt.Println("in callback case for vconnect")
+			connection.Chan <- true
+
+		}
 		connection.Ack = int16(tcpHdr.SeqNum)
+
 		if connection.State == state.SYN_SENT {
+			fmt.Println("connection state is syn sent")
 			connection.State = state.ESTABLISHED
 			connection.Seq = int16(tcpHdr.AckNum)
 			connection.Ack = int16(tcpHdr.SeqNum + 1)
@@ -147,14 +153,16 @@ func Callback_TCP(msg []byte, source netip.Addr, dest netip.Addr, ttl int) {
 		fmt.Println("updating window size")
 		connection.Window = int16(tcpHdr.WindowSize)
 
-		if tcpHdr.Flags == header.TCPFlagSyn || tcpHdr.Flags == header.TCPFlagSyn|header.TCPFlagAck {
+		if tcpHdr.Flags == header.TCPFlagSyn { // this is a packet sent from a VConnect
+
 			port := tcpHdr.DstPort
 			listenConn, exists := listenerTable[int16(port)]
 			if exists {
-				fmt.Println("sending to channel for ack")
+				fmt.Println("sending to channel for VAccept ack")
 				listenConn.Chan <- &VAcceptInfo{Conn: c, Seq: int16(tcpHdr.SeqNum), Ack: int16(tcpHdr.AckNum)}
 			}
 		}
+
 		if len(tcpPayload) != 0 {
 			connection.Seq = int16(tcpHdr.AckNum)
 			fmt.Println("Window Size Callback 1: ", connection.receiveBuf.WindowSize)
@@ -187,6 +195,7 @@ func Callback_TCP(msg []byte, source netip.Addr, dest netip.Addr, ttl int) {
 	if exists {
 		listenConn.Chan <- &VAcceptInfo{Conn: c, Seq: int16(tcpHdr.SeqNum), Ack: int16(tcpHdr.AckNum)}
 	}
+	fmt.Println("end of callback tcp")
 }
 
 func VConnect(addr netip.Addr, port int16) (*pkgUtils.VTCPConn, error) {
@@ -214,13 +223,22 @@ func VConnect(addr netip.Addr, port int16) (*pkgUtils.VTCPConn, error) {
 		return nil, err
 	}
 
+	// TODO: VConnect channel
+	ch := make(chan bool)
+
 	connectionTable[*c] = &TCPMetadata{
 		sendBuf:    s.SendBuf{Buf: buf.Buffer{Head: 0, Len: int16(bufsize), Arr: make([]byte, bufsize), WindowSize: int16(bufsize)}, UNA: 0},
 		receiveBuf: buf.Buffer{Head: 0, Len: int16(bufsize), Arr: make([]byte, bufsize), WindowSize: int16(bufsize)},
 		State:      state.SYN_SENT,
 		Window:     int16(bufsize),
+		Chan:       ch,
 	}
 	fourtupleOrder = append(fourtupleOrder, OrderInfo{0, c})
+	_, ok := <-ch
+	if !ok {
+		fmt.Println("failed")
+	}
+	fmt.Println("leaving VConnect")
 
 	return c, nil
 }

@@ -217,6 +217,7 @@ func VConnect(addr netip.Addr, port int16) (*pkgUtils.VTCPConn, error) {
 	max := 9998
 
 	randomSeq := rand.Intn(max-min+1) + min
+	fmt.Println("random seq ", randomSeq)
 
 	err = sendTCPPacket(sourceIp, addr, int16(randomPort), port, int16(randomSeq), 0, header.TCPFlagSyn, nil, uint16(bufsize))
 	if err != nil {
@@ -300,6 +301,7 @@ func VRead(entry int16, buffer []byte) error {
 	//wasFull := metadata.receiveBuf.WindowSize == 0
 
 	// Read data into a temporary slice of the requested size
+	fmt.Println("len(buffer): ", int16(len(buffer)))
 	dataRead := metadata.receiveBuf.Read(int16(len(buffer)))
 	copy(buffer, dataRead) // Copy dataRead into the provided buffer
 

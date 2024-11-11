@@ -100,6 +100,7 @@ func REPL() {
 			}
 
 			bytesToRead, err := strconv.ParseInt(words[2], 10, 16)
+			fmt.Println("bytesToRead", bytesToRead)
 			if err != nil {
 				fmt.Printf("Invalid bytes to read: %s\n", words[2])
 				continue

@@ -19,9 +19,9 @@ func (b *Buffer) Write(data []byte) {
 	// Determine how many bytes we can actually write
 	bytesToWrite := dataLen
 
-	if b.Full {
-		return
-	}
+	// if b.Full {
+	// 	return
+	// }
 
 	// Write data directly, handling wraparound
 	endIndex := b.Head + bytesToWrite
@@ -46,17 +46,17 @@ func (b *Buffer) Write(data []byte) {
 func (b *Buffer) Read(numBytes int16) (data []byte) {
 	// detect wraparound; potentially off by 1
 
-	var maxBytes int16
-	if b.LastRead < b.Head {
-		maxBytes = b.Head - b.LastRead
-	} else { // Wraparound case
-		maxBytes = b.Len - b.LastRead + b.Head
-	}
+	// var maxBytes int16
+	// if b.LastRead < b.Head {
+	// 	maxBytes = b.Head - b.LastRead
+	// } else { // Wraparound case
+	// 	maxBytes = b.Len - b.LastRead + b.Head
+	// }
 
-	// Limit numBytes to not exceed maxBytes
-	if numBytes > maxBytes {
-		numBytes = maxBytes
-	}
+	// // Limit numBytes to not exceed maxBytes
+	// if numBytes > maxBytes {
+	// 	numBytes = maxBytes
+	// }
 
 	fmt.Println("last read before if statement ", b.LastRead)
 	fmt.Println("head before if statement ", b.Head)
@@ -68,11 +68,18 @@ func (b *Buffer) Read(numBytes int16) (data []byte) {
 		}
 	}
 
+	fmt.Println("b.Len ", b.Len)
+	fmt.Println("b.LastRead ", b.LastRead)
+	fmt.Println("numBytes ", numBytes)
+
 	if b.LastRead+numBytes <= b.Len { // there is no wraparound
-		// fmt.Println("no wraparound. metadata head: ", b.Head)
+		fmt.Println("no wraparound. metadata head: ", b.Head)
+
 		end := b.LastRead + numBytes
+		fmt.Println("end ", end)
 		data = b.Arr[b.LastRead:end]
 	} else { // there is a wraparound
+		fmt.Println("wraparound")
 		data = b.Arr[b.LastRead:] // first chunk: head to end of buffer
 		diff := b.LastRead + numBytes - b.Len
 		b.WindowSize = b.Len - diff

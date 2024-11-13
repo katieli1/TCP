@@ -26,6 +26,7 @@ func (b *Buffer) Write(data []byte) {
 	// Write data directly, handling wraparound
 	endIndex := b.Head + bytesToWrite
 	if endIndex <= b.Len { // No wraparound
+		fmt.Println("no wraparound")
 		copy(b.Arr[b.Head:endIndex], data[:bytesToWrite])
 	} else { // Wraparound
 

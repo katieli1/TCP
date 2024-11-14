@@ -42,10 +42,10 @@ func (b *Buffer) Write(data []byte) {
 		b.Full = true
 	}
 
-	fmt.Println("len(data) ", len(data))
-	fmt.Println("updating windowsize from ", b.WindowSize)
+	// fmt.Println("len(data) ", len(data))
+	// fmt.Println("updating windowsize from ", b.WindowSize)
 	b.WindowSize -= int16(len(data))
-	fmt.Println("to ", b.WindowSize)
+	// fmt.Println("to ", b.WindowSize)
 }
 
 func (b *Buffer) Read(numBytes int16) (data []byte) {
@@ -63,50 +63,50 @@ func (b *Buffer) Read(numBytes int16) (data []byte) {
 	// 	numBytes = maxBytes
 	// }
 
-	fmt.Println("last read before if statement ", b.LastRead)
-	fmt.Println("head before if statement ", b.Head)
+	// fmt.Println("last read before if statement ", b.LastRead)
+	// fmt.Println("head before if statement ", b.Head)
 	if b.LastRead == b.Head {
-		fmt.Println("last read == head")
+		// fmt.Println("last read == head")
 		if !b.Full {
 			fmt.Printf("Read 0 bytes:\n")
 			return make([]byte, 0)
 		}
 	}
 
-	fmt.Println("b.Len ", b.Len)
-	fmt.Println("b.LastRead ", b.LastRead)
-	fmt.Println("numBytes ", numBytes)
+	// fmt.Println("b.Len ", b.Len)
+	// fmt.Println("b.LastRead ", b.LastRead)
+	// fmt.Println("numBytes ", numBytes)
 
 	if b.LastRead+numBytes <= b.Len { // there is no wraparound
-		fmt.Println("no wraparound. metadata head: ", b.Head)
+		// fmt.Println("no wraparound. metadata head: ", b.Head)
 
 		end := b.LastRead + numBytes
-		fmt.Println("end ", end)
+		// fmt.Println("end ", end)
 		data = b.Arr[b.LastRead:end]
 	} else { // there is a wraparound
-		fmt.Println("wraparound")
+		// fmt.Println("wraparound")
 		data = b.Arr[b.LastRead:] // first chunk: head to end of buffer
 		diff := b.LastRead + numBytes - b.Len
-		fmt.Println("updating windowsize from ", b.WindowSize)
+		// fmt.Println("updating windowsize from ", b.WindowSize)
 		b.WindowSize = b.Len - diff
-		fmt.Println("updating windowsize from ", b.WindowSize)
+		// fmt.Println("updating windowsize from ", b.WindowSize)
 		data = append(data, b.Arr[:diff]...) // append second chunk (starting from beginning of buffer)
 	}
 	b.LastRead += numBytes
 	b.LastRead = b.LastRead % b.Len
 	if b.Head == b.LastRead {
-		fmt.Println("setting b.Full to false")
+		// fmt.Println("setting b.Full to false")
 		b.Full = false
 	}
 
 	// fmt.Println("data as bytes: ", data)
 	// fmt.Printf("Read %d bytes: %s\n", numBytes, string(data))
 
-	// fmt.Println("head pos at end of read: ", b.Head)
-	// fmt.Println("lastread pos at end of read: ", b.LastRead)
+	fmt.Println("head pos at end of read: ", b.Head)
+	fmt.Println("lastread pos at end of read: ", b.LastRead)
 	fmt.Println("updating windowsize from ", b.WindowSize)
 	b.WindowSize += int16(min(int16(len(data)), b.Len))
-	fmt.Println("updating windowsize from ", b.WindowSize)
+	fmt.Println("updating windowsize to ", b.WindowSize)
 	return data
 }
 

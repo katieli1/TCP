@@ -282,13 +282,10 @@ func VSend(entry int16, message string) error {
 	fmt.Println("available space in send buf ", metadata.sendBuf.Buf.WindowSize)
 	for bytesToWrite > 0 {
 		end := min(int16(offset+int(metadata.sendBuf.Buf.WindowSize)), int16(offset+(bytesToWrite)))
-		fmt.Println("bytes to write: ", bytesToWrite)
-		bytesToWrite -= int(metadata.sendBuf.Buf.WindowSize)
-		offset += int(metadata.sendBuf.Buf.WindowSize)
 		metadata.sendBuf.Buf.Write(data[offset:end])
 
-		fmt.Println("data to send ", metadata.sendBuf.Buf.Arr)
 		// fmt.Println("WindowSize in vsend: ", metadata.sendBuf.Buf.WindowSize)
+		fmt.Println("data to send ", metadata.sendBuf.GetDataToSend())
 		err := sendTCPPacket(
 			orderStruct.VConn.SourceIp,
 			orderStruct.VConn.DestIp,
@@ -297,41 +294,23 @@ func VSend(entry int16, message string) error {
 			metadata.Seq,
 			metadata.Ack,
 			header.TCPFlagAck,
-			metadata.sendBuf.Buf.Arr, // TODO: mske sure not to send garbage bytes
+			metadata.sendBuf.GetDataToSend(), // TODO: mske sure not to send garbage bytes
 			uint16(metadata.sendBuf.Buf.WindowSize),
 		)
 
 		if err != nil {
 			return fmt.Errorf("error sending TCP packet: %w", err)
 		}
-		// fmt.Println("before receiving from channel")
 		ok := true
 		_, ok = <-metadata.sendBuf.Chan
-
-		fmt.Println("after receiving from channel")
 		fmt.Println("updated window size after channel ", metadata.sendBuf.Buf.WindowSize)
+		bytesToWrite -= int(metadata.sendBuf.Buf.WindowSize)
+		offset += int(metadata.sendBuf.Buf.WindowSize)
+		fmt.Println("after receiving from channel")
 		if !ok {
 			fmt.Println("error in sendbuf while loop")
 		}
 	}
-	// metadata.Ack = metadata.sendBuf.GetLastRead()
-	//update sender buffer with the information we are sending and then deleting that when we get an ack
-	// err := sendTCPPacket(
-	// 	orderStruct.VConn.SourceIp,
-	// 	orderStruct.VConn.DestIp,
-	// 	orderStruct.VConn.SourcePort,
-	// 	orderStruct.VConn.DestPort,
-	// 	metadata.Seq,
-	// 	metadata.Ack,
-	// 	header.TCPFlagAck,
-	// 	bytesMessage,
-	// 	uint16(metadata.sendBuf.Buf.WindowSize),
-	// ) // once these bytes are acked, they can exit the buffer and this loop can continue
-
-	// if err != nil {
-	// 	return fmt.Errorf("error sending TCP packet: %w", err)
-	// }
-
 	return nil
 }
 

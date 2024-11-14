@@ -21,12 +21,27 @@ func (b *SendBuf) Read(numBytes int16) (data []byte) {
 }
 
 func (b *SendBuf) UpdateUNA(newPos int16) {
-	b.UNA = (newPos - int16(b.StartingSeq)) % b.Buf.Len
+	b.UNA = (newPos - int16(b.StartingSeq) - 1) % b.Buf.Len
 	// if newPos >= b.Buf.Len {
 	// 	newPos = newPos - b.Buf.Len
 	// }
 	// b.UNA = newPos
 	fmt.Println("updating UNA: ", b.UNA)
+}
+
+func (b *SendBuf) GetDataToSend() (data []byte){
+	fmt.Println("UNA ", b.UNA)
+	fmt.Println("head ", b.Buf.Head)
+	if b.UNA < b.Buf.Head {
+		fmt.Println("no wraparound")
+		return b.Buf.Arr[b.UNA:b.Buf.Head]
+	} else {
+		fmt.Println("wraparound")
+		firstChunk := b.Buf.Arr[b.UNA:b.Buf.Len]
+		secondChunk := b.Buf.Arr[0:b.Buf.Head]
+		return append(firstChunk, secondChunk...)
+	}
+
 }
 
 func (b *SendBuf) GetWindowSize() (windowSize int16) {

@@ -26,7 +26,7 @@ func (b *Buffer) Write(data []byte) {
 	// Write data directly, handling wraparound
 	endIndex := b.Head + bytesToWrite
 	if endIndex <= b.Len { // No wraparound
-		fmt.Println("no wraparound")
+		//fmt.Println("no wraparound")
 		copy(b.Arr[b.Head:endIndex], data[:bytesToWrite])
 	} else { // Wraparound
 
@@ -36,9 +36,9 @@ func (b *Buffer) Write(data []byte) {
 	}
 
 	b.Head = (b.Head + bytesToWrite) % b.Len
-	fmt.Println("updating head to ", b.Head)
+	//fmt.Println("updating head to ", b.Head)
 	if b.Head == b.LastRead {
-		fmt.Println("setting b.Full to true")
+		//fmt.Println("setting b.Full to true")
 		b.Full = true
 	}
 	b.WindowSize -= int16(len(data))

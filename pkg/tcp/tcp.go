@@ -52,6 +52,10 @@ func Initialize(fileName string) {
 	go lookup.Initialize(fileName)
 }
 
+// func (*)HandleThread(){
+
+// }
+
 func VListen(port int16) *VListener {
 	return &VListener{Port: port, Chan: make(chan *VAcceptInfo)}
 }
@@ -123,7 +127,7 @@ func Callback_TCP(msg []byte, source netip.Addr, dest netip.Addr, ttl int) {
 	connection, exists := connectionTable[*c]
 
 	if exists {
-		fmt.Println("window size at start of callback ", connection.sendBuf.Buf.WindowSize)
+		// fmt.Println("window size at start of callback ", connection.sendBuf.Buf.WindowSize)
 
 		if tcpHdr.Flags == header.TCPFlagSyn|header.TCPFlagAck { // this is a packet sent by a VAccept
 			connection.Chan <- true
@@ -160,8 +164,13 @@ func Callback_TCP(msg []byte, source netip.Addr, dest netip.Addr, ttl int) {
 		// fmt.Println("starting seq: ", connection.sendBuf.StartingSeq)
 		// if tcpHdr.AckNum != (uint32(connection.Seq))
 		if len(tcpPayload) != 0 { // data packet
-			fmt.Println("callback is processing data packet")
+			//fmt.Println("callback is processing data packet")
+			//fmt.Println("tcp payload "+string(tcpPayload)+" and window size ", connection.receiveBuf.WindowSize)
+			if len(tcpPayload) > int(connection.receiveBuf.WindowSize) {
+				return
+			}
 			connection.Seq = int16(tcpHdr.AckNum)
+
 			connection.receiveBuf.Write(tcpPayload) // TODO: handle case where size is bigger than window size
 			connection.Ack = int16(tcpHdr.SeqNum) + int16(len(tcpPayload))
 
@@ -172,20 +181,22 @@ func Callback_TCP(msg []byte, source netip.Addr, dest netip.Addr, ttl int) {
 			}
 
 		} else {
-			fmt.Println("callback is processing ACK packet")
+			// fmt.Println("callback is processing ACK packet")
+			// fmt.Println("tcp header window size: ", tcpHdr.WindowSize)
 			//update variables for ack
 			//Todo, not use read but instead update the sender buffer with the new last send, next ....
 			// connection.sendBuf.Read(int16(tcpHdr.AckNum) - connection.Seq)
+
 			connection.sendBuf.UpdateUNA(int16(tcpHdr.AckNum))
 			diff := tcpHdr.AckNum - uint32(connection.Seq)
 			connection.Seq = int16(tcpHdr.AckNum - 1)
 
-			// fmt.Println("window size in ack: ", tcpHdr.WindowSize)
+			fmt.Println("receiver window size in callback: ", tcpHdr.WindowSize)
 			//connection.Window += int16(connection.sendBuf.UNA)
 			update := connection.sendBuf.Buf.WindowSize == 0
 			connection.sendBuf.Buf.WindowSize += int16(diff)
-			fmt.Println("diff ", diff)
-			fmt.Println("updated window size ", connection.sendBuf.Buf.WindowSize)
+			// fmt.Println("diff ", diff)
+			// fmt.Println("updated window size ", connection.sendBuf.Buf.WindowSize)
 			if update {
 				fmt.Println("sending to channel")
 				connection.sendBuf.Chan <- int16(connection.sendBuf.UNA)
@@ -202,10 +213,31 @@ func Callback_TCP(msg []byte, source netip.Addr, dest netip.Addr, ttl int) {
 		if exists {
 			listenConn.Chan <- &VAcceptInfo{Conn: c, Seq: int16(tcpHdr.SeqNum), Ack: int16(tcpHdr.AckNum)}
 		}
-
 	}
 
-	fmt.Println("end of callback tcp")
+	//fmt.Println("end of callback tcp")
+}
+
+func ZeroWindowProbing(orderStruct OrderInfo, toSend byte) { // toSend is a byteslice with one byte
+
+	metadata := connectionTable[*orderStruct.VConn]
+	for metadata.Window == 0 {
+		time.Sleep(1 * time.Second)
+		err := sendTCPPacket(
+			orderStruct.VConn.SourceIp,
+			orderStruct.VConn.DestIp,
+			orderStruct.VConn.SourcePort,
+			orderStruct.VConn.DestPort,
+			metadata.Seq,
+			metadata.Ack,
+			header.TCPFlagAck,
+			[]byte{toSend},
+			uint16(metadata.sendBuf.Buf.WindowSize),
+		)
+		if err != nil {
+			fmt.Println("error sending TCP packet: %w", err)
+		}
+	}
 }
 
 func VConnect(addr netip.Addr, port int16) (*pkgUtils.VTCPConn, error) {
@@ -253,7 +285,7 @@ func VConnect(addr netip.Addr, port int16) (*pkgUtils.VTCPConn, error) {
 	return c, nil
 }
 
-func VSend(entry int16, message string) error {
+func VWrite(entry int16, message string) error {
 	orderStruct := fourtupleOrder[entry]
 
 	if orderStruct.VConn == nil {
@@ -278,14 +310,26 @@ func VSend(entry int16, message string) error {
 	data := bytesMessage
 	bytesToWrite := len(data)
 	offset := 0
-	fmt.Println("bytes to write ", bytesToWrite)
-	fmt.Println("available space in send buf ", metadata.sendBuf.Buf.WindowSize)
+	// fmt.Println("bytes to write ", bytesToWrite)
+	// fmt.Println("available space in send buf ", metadata.sendBuf.Buf.WindowSize)
 	for bytesToWrite > 0 {
+
+		if metadata.Window == 0 {
+			ZeroWindowProbing(orderStruct, data[offset])
+			offset++
+			bytesToWrite--
+		}
 		end := min(int16(offset+int(metadata.sendBuf.Buf.WindowSize)), int16(offset+(bytesToWrite)))
 		metadata.sendBuf.Buf.Write(data[offset:end])
 
 		// fmt.Println("WindowSize in vsend: ", metadata.sendBuf.Buf.WindowSize)
-		fmt.Println("data to send ", metadata.sendBuf.GetDataToSend())
+		//fmt.Println("data to send ", metadata.sendBuf.GetDataToSend())
+		dataToSend := metadata.sendBuf.GetDataToSend()
+
+		if int(metadata.Window) < len(metadata.sendBuf.GetDataToSend()) {
+			dataToSend = dataToSend[0:metadata.Window]
+		}
+
 		err := sendTCPPacket(
 			orderStruct.VConn.SourceIp,
 			orderStruct.VConn.DestIp,
@@ -294,7 +338,7 @@ func VSend(entry int16, message string) error {
 			metadata.Seq,
 			metadata.Ack,
 			header.TCPFlagAck,
-			metadata.sendBuf.GetDataToSend(), // TODO: mske sure not to send garbage bytes
+			dataToSend,
 			uint16(metadata.sendBuf.Buf.WindowSize),
 		)
 
@@ -303,10 +347,10 @@ func VSend(entry int16, message string) error {
 		}
 		ok := true
 		_, ok = <-metadata.sendBuf.Chan
-		fmt.Println("updated window size after channel ", metadata.sendBuf.Buf.WindowSize)
-		bytesToWrite -= int(metadata.sendBuf.Buf.WindowSize)
-		offset += int(metadata.sendBuf.Buf.WindowSize)
-		fmt.Println("after receiving from channel")
+		//fmt.Println("updated window size after channel ", metadata.sendBuf.Buf.WindowSize)
+		bytesToWrite -= int(len(dataToSend))
+		offset += int(len(dataToSend))
+		//fmt.Println("after receiving from channel")
 		if !ok {
 			fmt.Println("error in sendbuf while loop")
 		}
@@ -328,7 +372,7 @@ func VRead(entry int16, buffer []byte) error {
 	//wasFull := metadata.receiveBuf.WindowSize == 0
 
 	// Read data into a temporary slice of the requested size
-	fmt.Println("len(buffer): ", int16(len(buffer)))
+	//fmt.Println("len(buffer): ", int16(len(buffer)))
 	dataRead := metadata.receiveBuf.Read(int16(len(buffer)))
 	copy(buffer, dataRead) // Copy dataRead into the provided buffer
 

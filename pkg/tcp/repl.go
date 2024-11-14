@@ -57,7 +57,7 @@ func REPL() {
 
 			message := strings.Join(words[2:], " ")
 			go func() {
-				VSend(int16(entry), message)
+				VWrite(int16(entry), message)
 			}()
 		} else if words[0] == "cl" { // close
 

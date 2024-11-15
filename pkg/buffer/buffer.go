@@ -44,7 +44,9 @@ func (b *Buffer) Write(data []byte) {
 
 	// fmt.Println("len(data) ", len(data))
 	// fmt.Println("updating windowsize from ", b.WindowSize)
+	fmt.Println("windowsize before updating in write: ", b.WindowSize)
 	b.WindowSize -= int16(len(data))
+	fmt.Println("windowsize before updating in write: ", b.WindowSize)
 	// fmt.Println("to ", b.WindowSize)
 }
 
@@ -78,7 +80,10 @@ func (b *Buffer) Read(numBytes int16) (data []byte) {
 		b.Full = false
 	}
 
+	fmt.Println("windowsize before updating in read: ", b.WindowSize)
+
 	b.WindowSize += int16(min(int16(len(data)), b.Len))
+	fmt.Println("windowsize after updating in read: ", b.WindowSize)
 	return data
 }
 

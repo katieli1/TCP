@@ -177,9 +177,12 @@ func Callback_TCP(msg []byte, source netip.Addr, dest netip.Addr, ttl int) {
 			fmt.Println("payload len ", len(tcpPayload))
 			connection.Ack = connection.Ack + int16(len(tcpPayload))
 			fmt.Println("ack after updating ", connection.Ack)
-			if bytesCanBeRead == 0 {
+			if bytesCanBeRead == 0 { // TODO: MAKE THIS NON-BLOCKING, PROBABLY FIX CONDITION
+
 				connection.receiveBuf.Chan <- 0
 			}
+
+			fmt.Println("sending callback")
 			err := sendTCPPacket(c.SourceIp, c.DestIp, c.SourcePort, c.DestPort, connection.Seq, connection.Ack, header.TCPFlagAck, nil, uint16(connection.receiveBuf.Buf.WindowSize))
 			if err != nil {
 				fmt.Println("Err")
@@ -345,7 +348,7 @@ func VWrite(entry int16, message string) error {
 			metadata.Ack,
 			header.TCPFlagAck,
 			dataToSend,
-			uint16(metadata.sendBuf.Buf.WindowSize),
+			uint16(metadata.receiveBuf.Buf.WindowSize),
 		)
 
 		if err != nil {
@@ -371,7 +374,7 @@ func VRead(entry int16, buffer []byte) error {
 		// Cannot send message to a listener entry
 		return fmt.Errorf("cannot send message: listener entry")
 	}
-	// c := orderStruct.VConn
+	c := orderStruct.VConn
 
 	metadata := connectionTable[*orderStruct.VConn]
 
@@ -390,6 +393,12 @@ func VRead(entry int16, buffer []byte) error {
 		copy(buffer[offset:], dataRead)
 		bytesToRead -= int16(len(dataRead))
 		offset += len(dataRead)
+	}
+
+	err := sendTCPPacket(c.SourceIp, c.DestIp, c.SourcePort, c.DestPort, metadata.Seq, metadata.Ack, header.TCPFlagAck, nil, uint16(metadata.receiveBuf.Buf.WindowSize))
+	if err != nil {
+		fmt.Println("Err")
+		return err
 	}
 	fmt.Println("left read loop")
 	return nil

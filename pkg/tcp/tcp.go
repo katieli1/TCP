@@ -132,7 +132,7 @@ func Callback_TCP(msg []byte, source netip.Addr, dest netip.Addr, ttl int) {
 		if tcpHdr.Flags == header.TCPFlagSyn|header.TCPFlagAck { // this is a packet sent by a VAccept
 			connection.Chan <- true
 		}
-		connection.Ack = int16(tcpHdr.SeqNum)
+		//connection.Ack = int16(tcpHdr.SeqNum)
 
 		if connection.State == state.SYN_SENT {
 			connection.State = state.ESTABLISHED
@@ -171,11 +171,14 @@ func Callback_TCP(msg []byte, source netip.Addr, dest netip.Addr, ttl int) {
 
 			connection.Seq = int16(tcpHdr.AckNum)
 			fmt.Println("tcp payload "+string(tcpPayload)+" and window size ", connection.receiveBuf.Buf.WindowSize)
-			bytesCanBeRead:=connection.receiveBuf.Buf.Len - connection.receiveBuf.Buf.WindowSize
+			bytesCanBeRead := connection.receiveBuf.Buf.Len - connection.receiveBuf.Buf.WindowSize
 			connection.receiveBuf.Buf.Write(tcpPayload) // TODO: handle case where size is bigger than window size
-			connection.Ack = int16(tcpHdr.SeqNum) + int16(len(tcpPayload))
+			fmt.Println("ack before updating ", connection.Ack)
+			fmt.Println("payload len ", len(tcpPayload))
+			connection.Ack = connection.Ack + int16(len(tcpPayload))
+			fmt.Println("ack after updating ", connection.Ack)
 			if bytesCanBeRead == 0 {
-				connection.receiveBuf.Chan<-0
+				connection.receiveBuf.Chan <- 0
 			}
 			err := sendTCPPacket(c.SourceIp, c.DestIp, c.SourcePort, c.DestPort, connection.Seq, connection.Ack, header.TCPFlagAck, nil, uint16(connection.receiveBuf.Buf.WindowSize))
 			if err != nil {
@@ -374,18 +377,21 @@ func VRead(entry int16, buffer []byte) error {
 
 	//wasFull := metadata.receiveBuf.WindowSize == 0
 	bytesToRead := int16(len(buffer))
+	offset := 0
 	// Read data into a temporary slice of the requested size
 	//fmt.Println("len(buffer): ", int16(len(buffer)))
-	for bytesToRead>0{
-		bytesCanBeRead:=metadata.receiveBuf.Buf.Len - metadata.receiveBuf.Buf.WindowSize
+	for bytesToRead > 0 {
+		bytesCanBeRead := metadata.receiveBuf.Buf.Len - metadata.receiveBuf.Buf.WindowSize
 		if bytesCanBeRead == 0 {
 			<-metadata.receiveBuf.Chan
-			bytesCanBeRead = metadata.receiveBuf.Buf.Len - metadata.receiveBuf.Buf.WindowSize;
+			bytesCanBeRead = metadata.receiveBuf.Buf.Len - metadata.receiveBuf.Buf.WindowSize
 		}
-		dataRead := metadata.receiveBuf.Buf.Read(min(bytesToRead,bytesCanBeRead))
-		copy(buffer, dataRead) 
+		dataRead := metadata.receiveBuf.Buf.Read(min(bytesToRead, bytesCanBeRead))
+		copy(buffer[offset:], dataRead)
 		bytesToRead -= int16(len(dataRead))
+		offset += len(dataRead)
 	}
+	fmt.Println("left read loop")
 	return nil
 }
 

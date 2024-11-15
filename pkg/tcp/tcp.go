@@ -19,7 +19,7 @@ import (
 
 type TCPMetadata struct {
 	sendBuf    s.SendBuf
-	receiveBuf buf.Buffer
+	receiveBuf s.RecieveBuf
 	Seq        int16
 	Ack        int16
 	Window     int16 // the other person's window size
@@ -73,7 +73,7 @@ func (l *VListener) VAccept() (*pkgUtils.VTCPConn, error) {
 	randomSeq := rand.Intn(max-min+1) + min
 	connectionTable[fourTuple] = &TCPMetadata{
 		sendBuf:    s.SendBuf{Buf: buf.Buffer{Head: 0, Len: int16(bufsize), Arr: make([]byte, bufsize), WindowSize: int16(bufsize)}, UNA: 0, Chan: make(chan int16), StartingSeq: randomSeq},
-		receiveBuf: buf.Buffer{Head: 0, Len: int16(bufsize), Arr: make([]byte, bufsize), WindowSize: int16(bufsize)},
+		receiveBuf: s.RecieveBuf{Buf: buf.Buffer{Head: 0, Len: int16(bufsize), Arr: make([]byte, bufsize), WindowSize: int16(bufsize)}, Chan: make(chan int16)},
 		Seq:        vAcceptInfo.Ack,
 		Ack:        vAcceptInfo.Seq + 1,
 		State:      state.SYN_RECEIVED,
@@ -165,16 +165,19 @@ func Callback_TCP(msg []byte, source netip.Addr, dest netip.Addr, ttl int) {
 		// if tcpHdr.AckNum != (uint32(connection.Seq))
 		if len(tcpPayload) != 0 { // data packet
 			//fmt.Println("callback is processing data packet")
-			if len(tcpPayload) > int(connection.receiveBuf.WindowSize) {
+			if len(tcpPayload) > int(connection.receiveBuf.Buf.WindowSize) {
 				return
 			}
 
 			connection.Seq = int16(tcpHdr.AckNum)
-			fmt.Println("tcp payload "+string(tcpPayload)+" and window size ", connection.receiveBuf.WindowSize)
-			connection.receiveBuf.Write(tcpPayload) // TODO: handle case where size is bigger than window size
+			fmt.Println("tcp payload "+string(tcpPayload)+" and window size ", connection.receiveBuf.Buf.WindowSize)
+			bytesCanBeRead:=connection.receiveBuf.Buf.Len - connection.receiveBuf.Buf.WindowSize
+			connection.receiveBuf.Buf.Write(tcpPayload) // TODO: handle case where size is bigger than window size
 			connection.Ack = int16(tcpHdr.SeqNum) + int16(len(tcpPayload))
-
-			err := sendTCPPacket(c.SourceIp, c.DestIp, c.SourcePort, c.DestPort, connection.Seq, connection.Ack, header.TCPFlagAck, nil, uint16(connection.receiveBuf.WindowSize))
+			if bytesCanBeRead == 0 {
+				connection.receiveBuf.Chan<-0
+			}
+			err := sendTCPPacket(c.SourceIp, c.DestIp, c.SourcePort, c.DestPort, connection.Seq, connection.Ack, header.TCPFlagAck, nil, uint16(connection.receiveBuf.Buf.WindowSize))
 			if err != nil {
 				fmt.Println("Err")
 				return
@@ -270,7 +273,7 @@ func VConnect(addr netip.Addr, port int16) (*pkgUtils.VTCPConn, error) {
 
 	connectionTable[*c] = &TCPMetadata{
 		sendBuf:    s.SendBuf{Buf: buf.Buffer{Head: 0, Len: int16(bufsize), Arr: make([]byte, bufsize), WindowSize: int16(bufsize)}, UNA: 0, Chan: make(chan int16), StartingSeq: randomSeq},
-		receiveBuf: buf.Buffer{Head: 0, Len: int16(bufsize), Arr: make([]byte, bufsize), WindowSize: int16(bufsize)},
+		receiveBuf: s.RecieveBuf{Buf: buf.Buffer{Head: 0, Len: int16(bufsize), Arr: make([]byte, bufsize), WindowSize: int16(bufsize)}, Chan: make(chan int16)},
 		State:      state.SYN_SENT,
 		Window:     int16(bufsize),
 		Chan:       ch,
@@ -297,10 +300,10 @@ func VWrite(entry int16, message string) error {
 
 	bytesMessage := []byte(message)
 
-	if metadata.Window == 0 {
-		fmt.Println("Failed to send bc window is 0")
-		return nil
-	}
+	// if metadata.Window == 0 {
+	// 	fmt.Println("Failed to send bc window is 0")
+	// 	return nil
+	// }
 
 	// if int16(len(bytesMessage)) > metadata.sendBuf.Buf.WindowSize {
 	// 	bytesMessage = bytesMessage[:metadata.sendBuf.Buf.WindowSize]
@@ -370,24 +373,19 @@ func VRead(entry int16, buffer []byte) error {
 	metadata := connectionTable[*orderStruct.VConn]
 
 	//wasFull := metadata.receiveBuf.WindowSize == 0
-
+	bytesToRead := int16(len(buffer))
 	// Read data into a temporary slice of the requested size
 	//fmt.Println("len(buffer): ", int16(len(buffer)))
-	dataRead := metadata.receiveBuf.Read(int16(len(buffer)))
-	copy(buffer, dataRead) // Copy dataRead into the provided buffer
-
-	// If the buffer was full and we've read data, send an ACK
-	// if len(dataRead) != 0 {
-	// 	// err := sendTCPPacket(
-	// 	// 	c.SourceIp, c.DestIp, c.SourcePort, c.DestPort,
-	// 	// 	metadata.Seq, metadata.Ack, header.TCPFlagAck, nil,
-	// 	// 	uint16(metadata.receiveBuf.WindowSize),
-	// 	// )
-	// 	if err != nil {
-	// 		return err
-	// 	}
-	// }
-
+	for bytesToRead>0{
+		bytesCanBeRead:=metadata.receiveBuf.Buf.Len - metadata.receiveBuf.Buf.WindowSize
+		if bytesCanBeRead == 0 {
+			<-metadata.receiveBuf.Chan
+			bytesCanBeRead = metadata.receiveBuf.Buf.Len - metadata.receiveBuf.Buf.WindowSize;
+		}
+		dataRead := metadata.receiveBuf.Buf.Read(min(bytesToRead,bytesCanBeRead))
+		copy(buffer, dataRead) 
+		bytesToRead -= int16(len(dataRead))
+	}
 	return nil
 }
 

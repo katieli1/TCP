@@ -51,35 +51,14 @@ func (b *Buffer) Write(data []byte) {
 func (b *Buffer) Read(numBytes int16) (data []byte) {
 	// detect wraparound; potentially off by 1
 
-	// var maxBytes int16
-	// if b.LastRead < b.Head {
-	// 	maxBytes = b.Head - b.LastRead
-	// } else { // Wraparound case
-	// 	maxBytes = b.Len - b.LastRead + b.Head
-	// }
-
-	// // Limit numBytes to not exceed maxBytes
-	// if numBytes > maxBytes {
-	// 	numBytes = maxBytes
-	// }
-
-	// fmt.Println("last read before if statement ", b.LastRead)
-	// fmt.Println("head before if statement ", b.Head)
 	if b.LastRead == b.Head {
-		// fmt.Println("last read == head")
 		if !b.Full {
 			fmt.Printf("Read 0 bytes:\n")
 			return make([]byte, 0)
 		}
 	}
 
-	// fmt.Println("b.Len ", b.Len)
-	// fmt.Println("b.LastRead ", b.LastRead)
-	// fmt.Println("numBytes ", numBytes)
-
-	if b.LastRead+numBytes <= b.Len { // there is no wraparound
-		// fmt.Println("no wraparound. metadata head: ", b.Head)
-
+	if b.LastRead+numBytes <= b.Len {
 		end := b.LastRead + numBytes
 		// fmt.Println("end ", end)
 		data = b.Arr[b.LastRead:end]
@@ -99,14 +78,7 @@ func (b *Buffer) Read(numBytes int16) (data []byte) {
 		b.Full = false
 	}
 
-	// fmt.Println("data as bytes: ", data)
-	// fmt.Printf("Read %d bytes: %s\n", numBytes, string(data))
-
-	fmt.Println("head pos at end of read: ", b.Head)
-	fmt.Println("lastread pos at end of read: ", b.LastRead)
-	fmt.Println("updating windowsize from ", b.WindowSize)
 	b.WindowSize += int16(min(int16(len(data)), b.Len))
-	fmt.Println("updating windowsize to ", b.WindowSize)
 	return data
 }
 

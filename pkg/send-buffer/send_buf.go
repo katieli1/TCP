@@ -12,6 +12,11 @@ type SendBuf struct {
 	StartingSeq int
 }
 
+type RecieveBuf struct {
+	Buf         buf.Buffer
+	Chan        chan int16
+}
+
 func (b *SendBuf) Write(data []byte) {
 	b.Buf.Write(data)
 }

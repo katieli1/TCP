@@ -13,8 +13,8 @@ type SendBuf struct {
 }
 
 type RecieveBuf struct {
-	Buf         buf.Buffer
-	Chan        chan int16
+	Buf  buf.Buffer
+	Chan chan int16
 }
 
 func (b *SendBuf) Write(data []byte) {
@@ -34,7 +34,7 @@ func (b *SendBuf) UpdateUNA(newPos int16) {
 	fmt.Println("updating UNA: ", b.UNA)
 }
 
-func (b *SendBuf) GetDataToSend() (data []byte){
+func (b *SendBuf) GetDataToSend() (data []byte) {
 	fmt.Println("UNA ", b.UNA)
 	fmt.Println("head ", b.Buf.Head)
 	if b.UNA < b.Buf.Head {

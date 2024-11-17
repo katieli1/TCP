@@ -171,15 +171,21 @@ func Callback_TCP(msg []byte, source netip.Addr, dest netip.Addr, ttl int) {
 
 			connection.Seq = int16(tcpHdr.AckNum)
 			fmt.Println("tcp payload "+string(tcpPayload)+" and window size ", connection.receiveBuf.Buf.WindowSize)
-			bytesCanBeRead := connection.receiveBuf.Buf.Len - connection.receiveBuf.Buf.WindowSize
+			// bytesCanBeRead := connection.receiveBuf.Buf.Len - connection.receiveBuf.Buf.WindowSize
 			connection.receiveBuf.Buf.Write(tcpPayload) // TODO: handle case where size is bigger than window size
 			fmt.Println("ack before updating ", connection.Ack)
 			fmt.Println("payload len ", len(tcpPayload))
 			connection.Ack = connection.Ack + int16(len(tcpPayload))
 			fmt.Println("ack after updating ", connection.Ack)
-			if bytesCanBeRead == 0 { // TODO: MAKE THIS NON-BLOCKING, PROBABLY FIX CONDITION
+			// if bytesCanBeRead == 0 { // TODO: MAKE THIS NON-BLOCKING, PROBABLY FIX CONDITION
+			// 	connection.receiveBuf.Chan <- 0
+			// }
 
-				connection.receiveBuf.Chan <- 0
+			select {
+			case connection.receiveBuf.Chan <- 0:
+				fmt.Println("sent through channel")
+			default:
+				fmt.Println("channel not ready, no receiver waiting")
 			}
 
 			fmt.Println("sending callback")
@@ -202,13 +208,20 @@ func Callback_TCP(msg []byte, source netip.Addr, dest netip.Addr, ttl int) {
 
 			// fmt.Println("receiver window size in callback: ", tcpHdr.WindowSize)
 			//connection.Window += int16(connection.sendBuf.UNA)
-			update := connection.sendBuf.Buf.WindowSize == 0
+			//update := connection.sendBuf.Buf.WindowSize == 0
 			connection.sendBuf.Buf.WindowSize += int16(diff)
 			// fmt.Println("diff ", diff)
 			// fmt.Println("updated window size ", connection.sendBuf.Buf.WindowSize)
-			if update {
-				// fmt.Println("sending to channel")
-				connection.sendBuf.Chan <- int16(connection.sendBuf.UNA)
+			// if update {
+			// 	// fmt.Println("sending to channel")
+			// 	connection.sendBuf.Chan <- int16(connection.sendBuf.UNA)
+			// }
+
+			select {
+			case connection.sendBuf.Chan <- int16(connection.sendBuf.UNA):
+				fmt.Println("sent through channel")
+			default:
+				fmt.Println("channel not ready, no receiver waiting")
 			}
 
 			// fmt.Println("after")
@@ -374,7 +387,7 @@ func VRead(entry int16, buffer []byte) error {
 		// Cannot send message to a listener entry
 		return fmt.Errorf("cannot send message: listener entry")
 	}
-	c := orderStruct.VConn
+	//c := orderStruct.VConn
 
 	metadata := connectionTable[*orderStruct.VConn]
 
@@ -384,22 +397,24 @@ func VRead(entry int16, buffer []byte) error {
 	// Read data into a temporary slice of the requested size
 	//fmt.Println("len(buffer): ", int16(len(buffer)))
 	for bytesToRead > 0 {
+
 		bytesCanBeRead := metadata.receiveBuf.Buf.Len - metadata.receiveBuf.Buf.WindowSize
 		if bytesCanBeRead == 0 {
 			<-metadata.receiveBuf.Chan
 			bytesCanBeRead = metadata.receiveBuf.Buf.Len - metadata.receiveBuf.Buf.WindowSize
 		}
+
 		dataRead := metadata.receiveBuf.Buf.Read(min(bytesToRead, bytesCanBeRead))
 		copy(buffer[offset:], dataRead)
 		bytesToRead -= int16(len(dataRead))
 		offset += len(dataRead)
 	}
 
-	err := sendTCPPacket(c.SourceIp, c.DestIp, c.SourcePort, c.DestPort, metadata.Seq, metadata.Ack, header.TCPFlagAck, nil, uint16(metadata.receiveBuf.Buf.WindowSize))
-	if err != nil {
-		fmt.Println("Err")
-		return err
-	}
+	// err := sendTCPPacket(c.SourceIp, c.DestIp, c.SourcePort, c.DestPort, metadata.Seq, metadata.Ack, header.TCPFlagAck, nil, uint16(metadata.receiveBuf.Buf.WindowSize))
+	// if err != nil {
+	// 	fmt.Println("Err")
+	// 	return err
+	// }
 	fmt.Println("left read loop")
 	return nil
 }

@@ -185,21 +185,26 @@ func Callback_TCP(msg []byte, source netip.Addr, dest netip.Addr, ttl int) {
 			// fmt.Println("ack before updating ", connection.Ack)
 			// fmt.Println("payload len ", len(tcpPayload))
 			connection.Ack = connection.Ack + int16(len(tcpPayload))
-			// fmt.Println("ack after updating ", connection.Ack)
+			//fmt.Println("ack after updating ", connection.Ack)
 			// if bytesCanBeRead == 0 { // TODO: MAKE THIS NON-BLOCKING, PROBABLY FIX CONDITION
 			// 	connection.receiveBuf.Chan <- 0
 			// }
-			wz := uint16(connection.receiveBuf.Buf.WindowSize)
+			windowSize := uint16(connection.receiveBuf.Buf.WindowSize)
+
 			select {
-			case btr := <-connection.receiveBuf.Chan:
-				fmt.Println("sent through channel", btr)
-				wz = uint16(min(btr, connection.receiveBuf.Buf.Len - connection.receiveBuf.Buf.WindowSize))
+
+			case bytesToRead := <-connection.receiveBuf.Chan:
+				//windowSize += uint16(bytesToRead)
+				bytesRead := uint16(min(bytesToRead, connection.receiveBuf.Buf.Len-connection.receiveBuf.Buf.WindowSize))
+				windowSize = bytesRead + uint16(connection.receiveBuf.Buf.WindowSize)
+				fmt.Println("bytes to read sent through channel. window size ", windowSize)
+				fmt.Println("bytesRead ", bytesRead)
 			default:
 				// fmt.Println("channel not ready, no receiver waiting")
 			}
 
-			// fmt.Println("sending callback")
-			err := sendTCPPacket(c.SourceIp, c.DestIp, c.SourcePort, c.DestPort, connection.Seq, connection.Ack, header.TCPFlagAck, nil, wz)
+			fmt.Println("sending callback")
+			err := sendTCPPacket(c.SourceIp, c.DestIp, c.SourcePort, c.DestPort, connection.Seq, connection.Ack, header.TCPFlagAck, nil, windowSize)
 			if err != nil {
 				fmt.Println("Err")
 				return
@@ -251,7 +256,7 @@ func Callback_TCP(msg []byte, source netip.Addr, dest netip.Addr, ttl int) {
 }
 
 func ZeroWindowProbing(VConn VTCPConn, toSend byte) { // toSend is a byteslice with one byte
-	fmt.Println(string(toSend))
+	fmt.Println("zero window probing")
 	metadata := connectionTable[VConn]
 	for metadata.Window == 0 {
 		err := sendTCPPacket(
@@ -343,15 +348,25 @@ func (VConn VTCPConn) VWrite(message string) error {
 			offset++
 			bytesToWrite--
 		}
-		end := min(int16(offset+int(metadata.sendBuf.Buf.WindowSize)), int16(len(data)-1))
-		fmt.Println("WindowSize in vsend: ", metadata.sendBuf.Buf.WindowSize, "offset: ", offset)
+		end := min(int16(offset+int(metadata.sendBuf.Buf.WindowSize)), int16(offset+(bytesToWrite)))
+
+		if int(metadata.Window) < int(end)-offset {
+			fmt.Println("truncating")
+			end = int16(offset) + metadata.Window
+		}
+
 		metadata.sendBuf.Buf.Write(data[offset:end])
+
+		// fmt.Println("WindowSize in vsend: ", metadata.sendBuf.Buf.WindowSize)
+		fmt.Println("send buffer: ", metadata.sendBuf.Buf.Arr)
+
 		dataToSend := metadata.sendBuf.GetDataToSend()
 
-		if int(metadata.Window) < len(metadata.sendBuf.GetDataToSend()) {
-			dataToSend = dataToSend[0:metadata.Window]
-		}
-		// fmt.Println("data to send ", string(dataToSend))
+		// if int(metadata.Window) < len(metadata.sendBuf.GetDataToSend()) {
+		// 	fmt.Println("truncating")
+		// 	dataToSend = dataToSend[0:metadata.Window]
+		// }
+		fmt.Println("data to send ", dataToSend)
 
 		err := sendTCPPacket(
 			VConn.SourceIp,
@@ -381,7 +396,7 @@ func (VConn VTCPConn) VWrite(message string) error {
 	return nil
 }
 
-func (VConn VTCPConn)  VRead( buffer []byte) error {
+func (VConn VTCPConn) VRead( buffer []byte) error {
 	//c := orderStruct.VConn
 
 	metadata := connectionTable[VConn]
@@ -395,7 +410,7 @@ func (VConn VTCPConn)  VRead( buffer []byte) error {
 
 		bytesCanBeRead := metadata.receiveBuf.Buf.Len - metadata.receiveBuf.Buf.WindowSize
 		if bytesCanBeRead == 0 {
-			metadata.receiveBuf.Chan<-bytesToRead
+			metadata.receiveBuf.Chan <- bytesCanBeRead
 			bytesCanBeRead = metadata.receiveBuf.Buf.Len - metadata.receiveBuf.Buf.WindowSize
 		}
 
@@ -583,3 +598,7 @@ func min(a, b int16) int16 {
 	}
 	return b
 }
+
+// func VClose() {
+
+// }

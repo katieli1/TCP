@@ -22,7 +22,7 @@ func (b *Buffer) Write(data []byte) {
 	// if b.Full {
 	// 	return
 	// }
-
+	//fmt.Println("b.Arr before write ", b.Arr)
 	// Write data directly, handling wraparound
 	endIndex := b.Head + bytesToWrite
 	if endIndex <= b.Len { // No wraparound
@@ -32,10 +32,16 @@ func (b *Buffer) Write(data []byte) {
 
 		firstChunkSize := b.Len - b.Head
 		copy(b.Arr[b.Head:], data[:firstChunkSize])
+		fmt.Println("first chunk ", data[:firstChunkSize])
+		fmt.Println("end of arr ", b.Arr[b.Head:])
 		copy(b.Arr[:endIndex%b.Len], data[firstChunkSize:])
+		fmt.Println("second chunk ", data[firstChunkSize:])
+		fmt.Println("start of arr ", b.Arr[:endIndex%b.Len])
 	}
-
+	//fmt.Println("b.Arr after write ", b.Arr)
+	fmt.Println("head before update, ", b.Head)
 	b.Head = (b.Head + bytesToWrite) % b.Len
+
 	//fmt.Println("updating head to ", b.Head)
 	if b.Head == b.LastRead {
 		//fmt.Println("setting b.Full to true")
@@ -44,9 +50,9 @@ func (b *Buffer) Write(data []byte) {
 
 	// fmt.Println("len(data) ", len(data))
 	// fmt.Println("updating windowsize from ", b.WindowSize)
-	// fmt.Println("windowsize before updating in write: ", b.WindowSize)
+	//fmt.Println("windowsize before updating in write: ", b.WindowSize)
 	b.WindowSize -= int16(len(data))
-	// fmt.Println("windowsize before updating in write: ", b.WindowSize)
+	//fmt.Println("windowsize before updating in write: ", b.WindowSize)
 	// fmt.Println("to ", b.WindowSize)
 }
 
@@ -55,7 +61,7 @@ func (b *Buffer) Read(numBytes int16) (data []byte) {
 
 	if b.LastRead == b.Head {
 		if !b.Full {
-			fmt.Printf("Read 0 bytes:\n")
+			//fmt.Printf("Read 0 bytes:\n")
 			return make([]byte, 0)
 		}
 	}
@@ -82,10 +88,10 @@ func (b *Buffer) Read(numBytes int16) (data []byte) {
 		b.Full = false
 	}
 
-	// fmt.Println("windowsize before updating in read: ", b.WindowSize)
+	//fmt.Println("windowsize before updating in read: ", b.WindowSize)
 
 	b.WindowSize += int16(min(int16(len(data)), b.Len))
-	// fmt.Println("windowsize after updating in read: ", b.WindowSize)
+	//fmt.Println("windowsize after updating in read: ", b.WindowSize)
 	return data
 }
 

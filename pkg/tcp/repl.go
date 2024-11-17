@@ -56,8 +56,14 @@ func REPL() {
 			}
 
 			message := strings.Join(words[2:], " ")
+			orderStruct := fourtupleOrder[entry]
+
+			if orderStruct.VConn == nil {
+				// Cannot send message to a listener entry
+				return;
+			}
 			go func() {
-				VWrite(int16(entry), message)
+				orderStruct.VConn.VWrite(message)
 			}()
 		} else if words[0] == "cl" { // close
 
@@ -86,17 +92,41 @@ func REPL() {
 			}
 		} else if words[0] == "sf" {
 
+			file := words[1]
+
+			ip, err := netip.ParseAddr(words[2])
+			if err != nil {
+				fmt.Println("Error:", err)
+
+			}
+			port, err := strconv.ParseInt(words[3], 10, 16)
+			if err != nil {
+				fmt.Println("Error:", err)
+
+			}
+
+			go SendFiles(ip,int16(port),file)
+
 		} else if words[0] == "rf" {
+
+			file := words[1]
+			port, err := strconv.ParseInt(words[2], 10, 16)
+			if err != nil {
+				fmt.Println("Error:", err)
+
+			}
+
+			go ReceiveFiles(int16(port),file)
 
 		} else if words[0] == "r" { // receive data on a socket
 			if len(words) < 3 {
-				fmt.Println("Usage: r <port> <bytes_to_read>")
+				fmt.Println("Usage: r <ID> <bytes_to_read>")
 				continue
 			}
 
-			port, err := strconv.ParseInt(words[1], 10, 16)
+			ID, err := strconv.ParseInt(words[1], 10, 16)
 			if err != nil {
-				fmt.Printf("Invalid port number: %s\n", words[1])
+				fmt.Printf("Invalid ID number: %s\n", words[1])
 				continue
 			}
 
@@ -108,7 +138,13 @@ func REPL() {
 			}
 
 			buffer := make([]byte, bytesToRead)
-			err = VRead(int16(port), buffer)
+			orderStruct := fourtupleOrder[int16(ID)]
+
+			if orderStruct.VConn == nil {
+				// Cannot send message to a listener entry
+				return
+			}
+			err = orderStruct.VConn.VRead(buffer)
 			if err != nil {
 				// Handle error
 			}

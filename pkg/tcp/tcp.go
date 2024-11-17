@@ -1,15 +1,17 @@
 package tcp
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	buf "ip/pkg/buffer"
 	"ip/pkg/iptcp_utils"
 	"ip/pkg/lookup"
-	"ip/pkg/pkgUtils"
 	s "ip/pkg/send-buffer"
 	state "ip/pkg/tcp_states"
 	"math/rand"
 	"net/netip"
+	"os"
 
 	"time"
 
@@ -26,8 +28,15 @@ type TCPMetadata struct {
 	State      state.TCPState
 	Chan       chan bool
 }
+type VTCPConn struct {
+	SourceIp   netip.Addr
+	SourcePort int16
+	DestIp     netip.Addr
+	DestPort   int16
+}
+
 type VAcceptInfo struct {
-	Conn *pkgUtils.VTCPConn
+	Conn *VTCPConn
 	Ack  int16
 	Seq  int16
 }
@@ -38,12 +47,12 @@ type VListener struct {
 }
 type OrderInfo struct {
 	Port  int16
-	VConn *pkgUtils.VTCPConn
+	VConn *VTCPConn
 }
 
 var fourtupleOrder []OrderInfo
 
-var connectionTable = make(map[pkgUtils.VTCPConn]*TCPMetadata)
+var connectionTable = make(map[VTCPConn]*TCPMetadata)
 var listenerTable = make(map[int16]*VListener)
 var bufsize = 10
 var sid = 0
@@ -60,7 +69,7 @@ func VListen(port int16) *VListener {
 	return &VListener{Port: port, Chan: make(chan *VAcceptInfo)}
 }
 
-func (l *VListener) VAccept() (*pkgUtils.VTCPConn, error) {
+func (l *VListener) VAccept() (*VTCPConn, error) {
 	vAcceptInfo, ok := <-l.Chan
 	if !ok {
 		fmt.Println("failed")
@@ -91,7 +100,7 @@ func (l *VListener) VAccept() (*pkgUtils.VTCPConn, error) {
 		connection.State = state.ESTABLISHED
 	}
 
-	return nil, nil
+	return &fourTuple, nil
 }
 
 func Callback_TCP(msg []byte, source netip.Addr, dest netip.Addr, ttl int) {
@@ -115,7 +124,7 @@ func Callback_TCP(msg []byte, source netip.Addr, dest netip.Addr, ttl int) {
 		fmt.Println("Error: bad checksum :(")
 	}
 
-	c := &pkgUtils.VTCPConn{
+	c := &VTCPConn{
 		SourceIp:   dest,
 		SourcePort: int16(tcpHdr.DstPort),
 		DestIp:     source,
@@ -170,26 +179,27 @@ func Callback_TCP(msg []byte, source netip.Addr, dest netip.Addr, ttl int) {
 			}
 
 			connection.Seq = int16(tcpHdr.AckNum)
-			fmt.Println("tcp payload "+string(tcpPayload)+" and window size ", connection.receiveBuf.Buf.WindowSize)
+			fmt.Println("tcp payload "+string(tcpPayload))
 			// bytesCanBeRead := connection.receiveBuf.Buf.Len - connection.receiveBuf.Buf.WindowSize
 			connection.receiveBuf.Buf.Write(tcpPayload) // TODO: handle case where size is bigger than window size
-			fmt.Println("ack before updating ", connection.Ack)
-			fmt.Println("payload len ", len(tcpPayload))
+			// fmt.Println("ack before updating ", connection.Ack)
+			// fmt.Println("payload len ", len(tcpPayload))
 			connection.Ack = connection.Ack + int16(len(tcpPayload))
-			fmt.Println("ack after updating ", connection.Ack)
+			// fmt.Println("ack after updating ", connection.Ack)
 			// if bytesCanBeRead == 0 { // TODO: MAKE THIS NON-BLOCKING, PROBABLY FIX CONDITION
 			// 	connection.receiveBuf.Chan <- 0
 			// }
-
+			wz := uint16(connection.receiveBuf.Buf.WindowSize)
 			select {
-			case connection.receiveBuf.Chan <- 0:
-				fmt.Println("sent through channel")
+			case btr := <-connection.receiveBuf.Chan:
+				fmt.Println("sent through channel", btr)
+				wz = uint16(min(btr, connection.receiveBuf.Buf.Len - connection.receiveBuf.Buf.WindowSize))
 			default:
-				fmt.Println("channel not ready, no receiver waiting")
+				// fmt.Println("channel not ready, no receiver waiting")
 			}
 
-			fmt.Println("sending callback")
-			err := sendTCPPacket(c.SourceIp, c.DestIp, c.SourcePort, c.DestPort, connection.Seq, connection.Ack, header.TCPFlagAck, nil, uint16(connection.receiveBuf.Buf.WindowSize))
+			// fmt.Println("sending callback")
+			err := sendTCPPacket(c.SourceIp, c.DestIp, c.SourcePort, c.DestPort, connection.Seq, connection.Ack, header.TCPFlagAck, nil, wz)
 			if err != nil {
 				fmt.Println("Err")
 				return
@@ -204,7 +214,7 @@ func Callback_TCP(msg []byte, source netip.Addr, dest netip.Addr, ttl int) {
 
 			connection.sendBuf.UpdateUNA(int16(tcpHdr.AckNum))
 			diff := tcpHdr.AckNum - uint32(connection.Seq)
-			connection.Seq = int16(tcpHdr.AckNum - 1)
+			connection.Seq = int16(tcpHdr.AckNum)
 
 			// fmt.Println("receiver window size in callback: ", tcpHdr.WindowSize)
 			//connection.Window += int16(connection.sendBuf.UNA)
@@ -219,9 +229,9 @@ func Callback_TCP(msg []byte, source netip.Addr, dest netip.Addr, ttl int) {
 
 			select {
 			case connection.sendBuf.Chan <- int16(connection.sendBuf.UNA):
-				fmt.Println("sent through channel")
+				// fmt.Println("sent through channel")
 			default:
-				fmt.Println("channel not ready, no receiver waiting")
+				// fmt.Println("channel not ready, no receiver waiting")
 			}
 
 			// fmt.Println("after")
@@ -240,20 +250,20 @@ func Callback_TCP(msg []byte, source netip.Addr, dest netip.Addr, ttl int) {
 	//fmt.Println("end of callback tcp")
 }
 
-func ZeroWindowProbing(orderStruct OrderInfo, toSend byte) { // toSend is a byteslice with one byte
-
-	metadata := connectionTable[*orderStruct.VConn]
+func ZeroWindowProbing(VConn VTCPConn, toSend byte) { // toSend is a byteslice with one byte
+	fmt.Println(string(toSend))
+	metadata := connectionTable[VConn]
 	for metadata.Window == 0 {
 		err := sendTCPPacket(
-			orderStruct.VConn.SourceIp,
-			orderStruct.VConn.DestIp,
-			orderStruct.VConn.SourcePort,
-			orderStruct.VConn.DestPort,
+			VConn.SourceIp,
+			VConn.DestIp,
+			VConn.SourcePort,
+			VConn.DestPort,
 			metadata.Seq,
 			metadata.Ack,
 			header.TCPFlagAck,
 			[]byte{toSend},
-			uint16(10), // has to be our reciever's buffer
+			uint16(metadata.sendBuf.GetWindowSize()), // has to be our reciever's buffer
 		)
 		if err != nil {
 			fmt.Println("error sending TCP packet: %w", err)
@@ -262,14 +272,14 @@ func ZeroWindowProbing(orderStruct OrderInfo, toSend byte) { // toSend is a byte
 	}
 }
 
-func VConnect(addr netip.Addr, port int16) (*pkgUtils.VTCPConn, error) {
+func VConnect(addr netip.Addr, port int16) (*VTCPConn, error) {
 	randomPort := GenerateUniquePort(addr, connectionTable)
 	sourceIp, err := lookup.GetHostIp()
 	if err != nil {
 		return nil, err
 	}
 
-	c := &pkgUtils.VTCPConn{
+	c := &VTCPConn{
 		SourceIp:   sourceIp,
 		SourcePort: int16(randomPort),
 		DestIp:     addr,
@@ -307,15 +317,8 @@ func VConnect(addr netip.Addr, port int16) (*pkgUtils.VTCPConn, error) {
 	return c, nil
 }
 
-func VWrite(entry int16, message string) error {
-	orderStruct := fourtupleOrder[entry]
-
-	if orderStruct.VConn == nil {
-		// Cannot send message to a listener entry
-		return fmt.Errorf("cannot send message: listener entry")
-	}
-
-	metadata := connectionTable[*orderStruct.VConn]
+func (VConn VTCPConn) VWrite(message string) error {
+	metadata := connectionTable[VConn]
 
 	bytesMessage := []byte(message)
 
@@ -335,28 +338,26 @@ func VWrite(entry int16, message string) error {
 	// fmt.Println("bytes to write ", bytesToWrite)
 	// fmt.Println("available space in send buf ", metadata.sendBuf.Buf.WindowSize)
 	for bytesToWrite > 0 {
-
 		if metadata.Window == 0 {
-			ZeroWindowProbing(orderStruct, data[offset])
+			ZeroWindowProbing(VConn, data[offset])
 			offset++
 			bytesToWrite--
 		}
-		end := min(int16(offset+int(metadata.sendBuf.Buf.WindowSize)), int16(offset+(bytesToWrite)))
+		end := min(int16(offset+int(metadata.sendBuf.Buf.WindowSize)), int16(len(data)-1))
+		fmt.Println("WindowSize in vsend: ", metadata.sendBuf.Buf.WindowSize, "offset: ", offset)
 		metadata.sendBuf.Buf.Write(data[offset:end])
-
-		// fmt.Println("WindowSize in vsend: ", metadata.sendBuf.Buf.WindowSize)
-		fmt.Println("data to send ", metadata.sendBuf.GetDataToSend())
 		dataToSend := metadata.sendBuf.GetDataToSend()
 
 		if int(metadata.Window) < len(metadata.sendBuf.GetDataToSend()) {
 			dataToSend = dataToSend[0:metadata.Window]
 		}
+		// fmt.Println("data to send ", string(dataToSend))
 
 		err := sendTCPPacket(
-			orderStruct.VConn.SourceIp,
-			orderStruct.VConn.DestIp,
-			orderStruct.VConn.SourcePort,
-			orderStruct.VConn.DestPort,
+			VConn.SourceIp,
+			VConn.DestIp,
+			VConn.SourcePort,
+			VConn.DestPort,
 			metadata.Seq,
 			metadata.Ack,
 			header.TCPFlagAck,
@@ -380,16 +381,10 @@ func VWrite(entry int16, message string) error {
 	return nil
 }
 
-func VRead(entry int16, buffer []byte) error {
-	orderStruct := fourtupleOrder[entry]
-
-	if orderStruct.VConn == nil {
-		// Cannot send message to a listener entry
-		return fmt.Errorf("cannot send message: listener entry")
-	}
+func (VConn VTCPConn)  VRead( buffer []byte) error {
 	//c := orderStruct.VConn
 
-	metadata := connectionTable[*orderStruct.VConn]
+	metadata := connectionTable[VConn]
 
 	//wasFull := metadata.receiveBuf.WindowSize == 0
 	bytesToRead := int16(len(buffer))
@@ -400,11 +395,12 @@ func VRead(entry int16, buffer []byte) error {
 
 		bytesCanBeRead := metadata.receiveBuf.Buf.Len - metadata.receiveBuf.Buf.WindowSize
 		if bytesCanBeRead == 0 {
-			<-metadata.receiveBuf.Chan
+			metadata.receiveBuf.Chan<-bytesToRead
 			bytesCanBeRead = metadata.receiveBuf.Buf.Len - metadata.receiveBuf.Buf.WindowSize
 		}
 
 		dataRead := metadata.receiveBuf.Buf.Read(min(bytesToRead, bytesCanBeRead))
+		fmt.Println("bytes to Read: ", bytesToRead)
 		copy(buffer[offset:], dataRead)
 		bytesToRead -= int16(len(dataRead))
 		offset += len(dataRead)
@@ -453,7 +449,7 @@ func sendTCPPacket(srcIp, destIp netip.Addr, srcPort, destPort, Seq, Ack int16, 
 	return nil
 }
 
-func GenerateUniquePort(addr netip.Addr, connectionTable map[pkgUtils.VTCPConn]*TCPMetadata) int16 {
+func GenerateUniquePort(addr netip.Addr, connectionTable map[VTCPConn]*TCPMetadata) int16 {
 	rand.Seed(time.Now().UnixNano())
 	min := 1024
 	max := 9998
@@ -477,6 +473,109 @@ func GenerateUniquePort(addr netip.Addr, connectionTable map[pkgUtils.VTCPConn]*
 
 	return int16(randomPort)
 }
+
+
+func SendFiles(addr netip.Addr, port int16, filePath string) {
+	// Establish connection
+	conn, err := VConnect(addr, port)
+	if err != nil {
+		fmt.Printf("Failed to connect: %v\n", err)
+		return
+	}
+	// defer conn.Close() // Ensure connection is closed
+
+	// Open the file for reading
+	file, err := os.Open(filePath)
+	if err != nil {
+		fmt.Printf("Failed to open file: %v\n", err)
+		return
+	}
+	defer file.Close()
+
+	// Create a buffer to read the file in chunks
+	buffer := make([]byte, 1024) // 1 KB buffer size
+	totalBytesSent := 0
+
+	for {
+		// Read a chunk from the file
+		n, err := file.Read(buffer)
+		if err != nil {
+			if err == io.EOF {
+				break // End of file reached
+			}
+			fmt.Printf("Error reading file: %v\n", err)
+			return
+		}
+
+		// Send the chunk using VWrite
+		err = conn.VWrite(string(buffer[:n]))
+		if err != nil {
+			fmt.Printf("Failed to send data: %v\n", err)
+			return
+		}
+		totalBytesSent += n
+	}
+
+	fmt.Printf("File sent successfully. Total bytes sent: %d\n", totalBytesSent)
+}
+
+func ReceiveFiles(port int16, filePath string) {
+	// Start listening on the specified port
+	listenConn := VListen(port)
+	listenerTable[port] = listenConn
+	fourtupleOrder = append(fourtupleOrder, OrderInfo{port, nil})
+
+	// Accept the incoming connection
+	conn, err := listenConn.VAccept()
+	if err != nil {
+		fmt.Printf("Error accepting connection: %v\n", err)
+		return
+	}
+	// defer conn.Close() // Ensure the connection is closed after receiving the file
+
+	// Open the file for writing
+	file, err := os.Create(filePath)
+	if err != nil {
+		fmt.Printf("Error creating file: %v\n", err)
+		return
+	}
+	defer file.Close()
+
+	// Create a buffer for reading data
+	buffer := make([]byte, 199) // 1 KB buffer size
+	totalBytesReceived := 0      // Track the total number of bytes received
+
+	for {
+		// Read data from the connection into the buffer
+		err := conn.VRead(buffer)
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				break // End of data
+			}
+			fmt.Printf("Error reading data: %v\n", err)
+			return
+		}
+
+		// Write the data to the file
+		n, writeErr := file.Write(buffer)
+		if writeErr != nil {
+			fmt.Printf("Error writing to file: %v\n", writeErr)
+			return
+		}
+
+		// Update total bytes received
+		totalBytesReceived += n
+		if (totalBytesReceived) == 199{
+			break
+		}
+		fmt.Printf("File received successfully. Total bytes received: %d\n", totalBytesReceived)
+	}
+
+	// Print the total bytes received
+	fmt.Printf("File received successfully. Total bytes received: %d\n", totalBytesReceived)
+}
+
+
 
 func min(a, b int16) int16 {
 	if a < b {

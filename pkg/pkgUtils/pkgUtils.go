@@ -1,17 +1,8 @@
 package pkgUtils
 
 import (
-	"bytes"
-	"encoding/binary"
 	"net/netip"
 )
-
-type VTCPConn struct {
-	SourceIp   netip.Addr
-	SourcePort int16
-	DestIp     netip.Addr
-	DestPort   int16
-}
 
 // type VListener struct {
 // 	Port int16
@@ -39,75 +30,75 @@ func Uint32ToIP(ipUint32 uint32) netip.Addr {
 	return ip
 }
 
-func (v *VTCPConn) Unmarshal(data []byte) error {
-	buf := bytes.NewReader(data)
+// func (v *VTCPConn) Unmarshal(data []byte) error {
+// 	buf := bytes.NewReader(data)
 
-	// Unmarshal SourceIp (16 bytes + 1 byte for metadata)
-	var sourceIpBytes [16]byte
-	if err := binary.Read(buf, binary.BigEndian, &sourceIpBytes); err != nil {
-		return err
-	}
-	var sourceIpLen byte
-	if err := binary.Read(buf, binary.BigEndian, &sourceIpLen); err != nil {
-		return err
-	}
-	v.SourceIp = netip.AddrFrom16(sourceIpBytes).Unmap()
+// 	// Unmarshal SourceIp (16 bytes + 1 byte for metadata)
+// 	var sourceIpBytes [16]byte
+// 	if err := binary.Read(buf, binary.BigEndian, &sourceIpBytes); err != nil {
+// 		return err
+// 	}
+// 	var sourceIpLen byte
+// 	if err := binary.Read(buf, binary.BigEndian, &sourceIpLen); err != nil {
+// 		return err
+// 	}
+// 	v.SourceIp = netip.AddrFrom16(sourceIpBytes).Unmap()
 
-	// Unmarshal SourcePort
-	if err := binary.Read(buf, binary.BigEndian, &v.SourcePort); err != nil {
-		return err
-	}
+// 	// Unmarshal SourcePort
+// 	if err := binary.Read(buf, binary.BigEndian, &v.SourcePort); err != nil {
+// 		return err
+// 	}
 
-	// Unmarshal DestIp (16 bytes + 1 byte for metadata)
-	var destIpBytes [16]byte
-	if err := binary.Read(buf, binary.BigEndian, &destIpBytes); err != nil {
-		return err
-	}
-	var destIpLen byte
-	if err := binary.Read(buf, binary.BigEndian, &destIpLen); err != nil {
-		return err
-	}
-	v.DestIp = netip.AddrFrom16(destIpBytes).Unmap()
+// 	// Unmarshal DestIp (16 bytes + 1 byte for metadata)
+// 	var destIpBytes [16]byte
+// 	if err := binary.Read(buf, binary.BigEndian, &destIpBytes); err != nil {
+// 		return err
+// 	}
+// 	var destIpLen byte
+// 	if err := binary.Read(buf, binary.BigEndian, &destIpLen); err != nil {
+// 		return err
+// 	}
+// 	v.DestIp = netip.AddrFrom16(destIpBytes).Unmap()
 
-	// Unmarshal DestPort
-	if err := binary.Read(buf, binary.BigEndian, &v.DestPort); err != nil {
-		return err
-	}
+// 	// Unmarshal DestPort
+// 	if err := binary.Read(buf, binary.BigEndian, &v.DestPort); err != nil {
+// 		return err
+// 	}
 
-	return nil
+// 	return nil
 
-}
+// }
 
-func Marshal(v VTCPConn) ([]byte, error) {
-	buf := new(bytes.Buffer)
+// func Marshal(v VTCPConn) ([]byte, error) {
+// 	buf := new(bytes.Buffer)
 
-	// Marshal SourceIp as 16 bytes (IPv4-mapped in IPv6 form) and 1 byte for metadata
-	sourceIpBytes := v.SourceIp.As16()
-	if err := binary.Write(buf, binary.BigEndian, sourceIpBytes); err != nil {
-		return nil, err
-	}
-	if err := binary.Write(buf, binary.BigEndian, byte(v.SourceIp.BitLen()/8)); err != nil {
-		return nil, err
-	}
+// 	// Marshal SourceIp as 16 bytes (IPv4-mapped in IPv6 form) and 1 byte for metadata
+// 	sourceIpBytes := v.SourceIp.As16()
+// 	if err := binary.Write(buf, binary.BigEndian, sourceIpBytes); err != nil {
+// 		return nil, err
+// 	}
+// 	if err := binary.Write(buf, binary.BigEndian, byte(v.SourceIp.BitLen()/8)); err != nil {
+// 		return nil, err
+// 	}
 
-	// Marshal SourcePort
-	if err := binary.Write(buf, binary.BigEndian, v.SourcePort); err != nil {
-		return nil, err
-	}
+// 	// Marshal SourcePort
+// 	if err := binary.Write(buf, binary.BigEndian, v.SourcePort); err != nil {
+// 		return nil, err
+// 	}
 
-	// Marshal DestIp as 16 bytes and 1 byte for metadata
-	destIpBytes := v.DestIp.As16()
-	if err := binary.Write(buf, binary.BigEndian, destIpBytes); err != nil {
-		return nil, err
-	}
-	if err := binary.Write(buf, binary.BigEndian, byte(v.DestIp.BitLen()/8)); err != nil {
-		return nil, err
-	}
+// 	// Marshal DestIp as 16 bytes and 1 byte for metadata
+// 	destIpBytes := v.DestIp.As16()
+// 	if err := binary.Write(buf, binary.BigEndian, destIpBytes); err != nil {
+// 		return nil, err
+// 	}
+// 	if err := binary.Write(buf, binary.BigEndian, byte(v.DestIp.BitLen()/8)); err != nil {
+// 		return nil, err
+// 	}
 
-	// Marshal DestPort
-	if err := binary.Write(buf, binary.BigEndian, v.DestPort); err != nil {
-		return nil, err
-	}
+// 	// Marshal DestPort
+// 	if err := binary.Write(buf, binary.BigEndian, v.DestPort); err != nil {
+// 		return nil, err
+// 	}
 
-	return buf.Bytes(), nil
-}
+// 	return buf.Bytes(), nil
+// }

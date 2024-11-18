@@ -144,11 +144,11 @@ func REPL() {
 				// Cannot send message to a listener entry
 				return
 			}
-			err = orderStruct.VConn.VRead(buffer)
+			bytesRead,err := orderStruct.VConn.VRead(buffer)
 			if err != nil {
 				// Handle error
 			}
-			fmt.Printf("Read %d bytes: %s\n", len(buffer), string(buffer))
+			fmt.Printf("Read %d bytes: %s\n", bytesRead, string(buffer))
 
 		} else {
 			fmt.Println("Invalid command. Valid commands include li, ln, lr, up <ifname>, down <ifname>, send <addr> <message ...>, and q to quit.")

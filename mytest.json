@@ -7,6 +7,6 @@
     },
     "r1": {
      "binary_path": "./reference/vrouter",
-     "extra_args": "--drop 0.5 --log-level debug"
+     "extra_args": "--drop 0 --log-level debug"
     }
    }

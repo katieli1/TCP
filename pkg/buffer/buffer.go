@@ -58,6 +58,7 @@ func (b *Buffer) Write(data []byte) {
 
 func (b *Buffer) Read(numBytes int16) (data []byte) {
 	// detect wraparound; potentially off by 1
+	fmt.Println("numBytes in Read ", numBytes)
 
 	if b.LastRead == b.Head {
 		if !b.Full {
@@ -66,10 +67,8 @@ func (b *Buffer) Read(numBytes int16) (data []byte) {
 		}
 	}
 
-
-
 	if b.LastRead+numBytes <= b.Len {
-		end := b.LastRead + numBytes
+		end := b.LastRead + numBytes //
 		// fmt.Println("end ", end)
 		data = b.Arr[b.LastRead:end]
 	} else { // there is a wraparound

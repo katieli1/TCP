@@ -2,6 +2,7 @@ package pkgUtils
 
 import (
 	buf "ip/pkg/buffer"
+	"sync"
 )
 
 type SendBuf struct {
@@ -9,6 +10,13 @@ type SendBuf struct {
 	Buf         buf.Buffer
 	Chan        chan int16
 	StartingSeq int
+	Queue       []Packet // holds all unACKed packets
+	QueueMutex  sync.RWMutex
+}
+
+type Packet struct {
+	Seq  int16
+	Data []byte
 }
 
 type RecieveBuf struct {
@@ -18,6 +26,7 @@ type RecieveBuf struct {
 
 func (b *SendBuf) Write(data []byte) {
 	b.Buf.Write(data)
+	b.Queue = append(b.Queue, Packet{Seq: 0, Data: data})
 }
 
 func (b *SendBuf) Read(numBytes int16) (data []byte) {

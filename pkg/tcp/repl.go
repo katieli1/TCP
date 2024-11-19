@@ -35,7 +35,6 @@ func REPL() {
 			ip, err := netip.ParseAddr(words[1])
 			if err != nil {
 				fmt.Println("Error:", err)
-
 			}
 			port, err := strconv.ParseInt(words[2], 10, 16)
 			if err != nil {
@@ -60,12 +59,38 @@ func REPL() {
 
 			if orderStruct.VConn == nil {
 				// Cannot send message to a listener entry
-				return;
+				return
 			}
 			go func() {
 				orderStruct.VConn.VWrite(message)
 			}()
 		} else if words[0] == "cl" { // close
+			if len(words) < 2 {
+				fmt.Println("Usage: cl <port>")
+				continue
+			}
+			entry, err := strconv.ParseInt(words[1], 10, 16)
+			if err != nil {
+				fmt.Printf("Invalid entry: %s\n", words[1])
+				continue
+			}
+
+			orderStruct := fourtupleOrder[entry]
+
+			if orderStruct.VConn == nil {
+				// this is a listener entry
+				go func() {
+					listener, exists := listenerTable[orderStruct.Port]
+					if exists {
+
+						listener.VClose()
+					}
+				}()
+			} else {
+				go func() {
+					orderStruct.VConn.VClose()
+				}()
+			}
 
 		} else if words[0] == "ls" {
 			fmt.Printf("%-10s %-15s %-10s %-15s %-10s %-10s\n", "SID", "LAddr", "LPort", "RAddr", "RPort", "Status")
@@ -105,7 +130,7 @@ func REPL() {
 
 			}
 
-			go SendFiles(ip,int16(port),file)
+			go SendFiles(ip, int16(port), file)
 
 		} else if words[0] == "rf" {
 
@@ -116,7 +141,7 @@ func REPL() {
 
 			}
 
-			go ReceiveFiles(int16(port),file)
+			go ReceiveFiles(int16(port), file)
 
 		} else if words[0] == "r" { // receive data on a socket
 			if len(words) < 3 {
@@ -144,7 +169,7 @@ func REPL() {
 				// Cannot send message to a listener entry
 				return
 			}
-			bytesRead,err := orderStruct.VConn.VRead(buffer)
+			bytesRead, err := orderStruct.VConn.VRead(buffer)
 			if err != nil {
 				// Handle error
 			}
@@ -160,11 +185,11 @@ func ACommand(port int16) {
 	listenConn := VListen(port)
 	listenerTable[port] = listenConn
 	fourtupleOrder = append(fourtupleOrder, OrderInfo{port, nil})
+
 	for {
 		_, err := listenConn.VAccept()
 		if err != nil {
 			fmt.Println("Error ", err)
 		}
-
 	}
 }

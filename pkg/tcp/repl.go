@@ -35,7 +35,6 @@ func REPL() {
 			ip, err := netip.ParseAddr(words[1])
 			if err != nil {
 				fmt.Println("Error:", err)
-
 			}
 			port, err := strconv.ParseInt(words[2], 10, 16)
 			if err != nil {
@@ -74,6 +73,24 @@ func REPL() {
 			if err != nil {
 				fmt.Printf("Invalid entry: %s\n", words[1])
 				continue
+			}
+
+
+			orderStruct := fourtupleOrder[entry]
+
+			if orderStruct.VConn == nil {
+				// this is a listener entry
+				go func() {
+					listener, exists := listenerTable[orderStruct.Port]
+					if exists {
+
+						listener.VClose()
+					}
+				}()
+			} else {
+				go func() {
+					orderStruct.VConn.VClose()
+				}()
 			}
 
 			orderStruct := fourtupleOrder[entry]
@@ -185,11 +202,11 @@ func ACommand(port int16) {
 	listenConn := VListen(port)
 	listenerTable[port] = listenConn
 	fourtupleOrder = append(fourtupleOrder, OrderInfo{port, nil})
+
 	for {
 		_, err := listenConn.VAccept()
 		if err != nil {
 			fmt.Println("Error ", err)
 		}
-
 	}
 }

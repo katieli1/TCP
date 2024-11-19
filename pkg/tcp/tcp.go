@@ -116,6 +116,7 @@ func (l *VListener) VAccept() (*VTCPConn, error) {
 		State:      state.SYN_RECEIVED,
 		Window:     int16(bufsize),
 		OutOfOrder: make(map[int16][]byte),
+
 	}
 	fourtupleOrder = append(fourtupleOrder, OrderInfo{0, &fourTuple})
 
@@ -133,6 +134,7 @@ func (l *VListener) VAccept() (*VTCPConn, error) {
 	for {
 		select {
 		case response, ok := <-l.Chan:
+
 
 			if !ok {
 				fmt.Println("failed: channel closed")
@@ -153,6 +155,7 @@ func (l *VListener) VAccept() (*VTCPConn, error) {
 			if connection.State == state.SYN_RECEIVED {
 				connection.State = state.ESTABLISHED
 				connection.Seq = int16(randomSeq)
+
 				// Connection established, stop retransmitting
 				go Retransmit(connectionTable[fourTuple], &fourTuple)
 				return &fourTuple, nil
@@ -164,6 +167,7 @@ func (l *VListener) VAccept() (*VTCPConn, error) {
 				fmt.Println("Max retries reached, closing connection.")
 				return nil, fmt.Errorf("connection attempt failed after %d retries", maxRetries)
 			}
+
 
 			// Retransmit the SYN-ACK if we haven't received a valid response
 			fmt.Println("Retransmitting SYN-ACK... Retry count:", retryCount+1)
@@ -218,6 +222,7 @@ func Callback_TCP(msg []byte, source netip.Addr, dest netip.Addr, ttl int) {
 		}
 
 		if tcpHdr.Flags == header.TCPFlagFin && connection.State != state.FIN_WAIT_2 { // we are receiving a fin for the first time
+
 			connection.State = state.CLOSE_WAIT
 			err := sendTCPPacket(c.SourceIp, c.DestIp, c.SourcePort, c.DestPort, connection.Seq, connection.Ack, header.TCPFlagAck, nil, uint16(connection.receiveBuf.Buf.WindowSize))
 			if err != nil {
@@ -225,6 +230,7 @@ func Callback_TCP(msg []byte, source netip.Addr, dest netip.Addr, ttl int) {
 
 			}
 			return
+
 		}
 
 		if tcpHdr.Flags == header.TCPFlagFin && connection.State == state.FIN_WAIT_2 { // we initiated the FIN
@@ -239,6 +245,7 @@ func Callback_TCP(msg []byte, source netip.Addr, dest netip.Addr, ttl int) {
 			delete(connectionTable, *c)
 			return
 		}
+
 
 		if connection.State == state.LAST_ACK {
 			connection.State = state.CLOSED
@@ -329,9 +336,15 @@ func Callback_TCP(msg []byte, source netip.Addr, dest netip.Addr, ttl int) {
 		}
 
 	} else { // No existing connection
+
 		UnblockVAccept(c, &tcpHdr)
 	}
 }
+
+// func deleteTCB(c *VTCPConn) {
+// 	connectionTable[]
+
+// }
 
 func UnblockVAccept(c *VTCPConn, tcpHdr *header.TCPFields) {
 	port := tcpHdr.DstPort
@@ -458,10 +471,12 @@ func VConnect(addr netip.Addr, port int16) (*VTCPConn, error) {
 }
 
 func (VConn VTCPConn) VWrite(message string) error {
+
 	metadata := connectionTable[VConn]
 	if metadata.State != state.ESTABLISHED {
 		return errors.New("connection state is not established")
 	}
+
 	bytesMessage := []byte(message)
 
 	data := bytesMessage
@@ -533,6 +548,7 @@ func (VConn VTCPConn) VRead(buffer []byte) (int16, error) {
 	bytesCanBeRead := metadata.receiveBuf.Buf.Len - metadata.receiveBuf.Buf.WindowSize
 	if bytesCanBeRead == 0 {
 		<-metadata.receiveBuf.Chan
+
 		bytesCanBeRead = metadata.receiveBuf.Buf.Len - metadata.receiveBuf.Buf.WindowSize
 	}
 	dataRead := metadata.receiveBuf.Buf.Read(min(bytesToRead, bytesCanBeRead))
@@ -763,6 +779,7 @@ func (c *VTCPConn) VClose() error {
 	} else {
 		metadata.State = state.LAST_ACK
 	}
+
 
 	return nil
 }

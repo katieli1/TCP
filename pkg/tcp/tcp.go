@@ -154,7 +154,7 @@ func (l *VListener) VAccept() (*VTCPConn, error) {
                 connection.State = state.ESTABLISHED
 				connection.Seq = int16(randomSeq)
                 // Connection established, stop retransmitting
-				// go Retransmit(connectionTable[fourTuple], &fourTuple)
+				go Retransmit(connectionTable[fourTuple], &fourTuple)
                 return &fourTuple, nil
             }
 
@@ -270,7 +270,7 @@ func Callback_TCP(msg []byte, source netip.Addr, dest netip.Addr, ttl int) {
 		} else { // No payload (ACK or pure control packet)
 			//update this logic
 
-			if tcpHdr.AckNum <= uint32(connection.Seq){
+			// if tcpHdr.AckNum <= uint32(connection.Seq){
 
 				connection.sendBuf.UpdateUNA(int16(tcpHdr.AckNum))
 				diff := tcpHdr.AckNum - uint32(connection.LastRecievedAck)
@@ -291,7 +291,7 @@ func Callback_TCP(msg []byte, source netip.Addr, dest netip.Addr, ttl int) {
 				case connection.sendBuf.Chan <- int16(connection.sendBuf.UNA):
 				default:
 				}
-			}
+			// }
 		}
 
 	} else { // No existing connection
@@ -399,7 +399,7 @@ func VConnect(addr netip.Addr, port int16) (*VTCPConn, error) {
 				fmt.Println("Error sending ACK:", err)
 				return nil, err
 			}
-			// go Retransmit(connectionTable[*c], c)
+			go Retransmit(connectionTable[*c], c)
 			// Return the connection information after sending the ACK
 			return c, nil
 
@@ -440,7 +440,8 @@ func (VConn VTCPConn) VWrite(message string) error {
 			ZeroWindowProbing(VConn, data[offset])
 			metadata.Seq += 1
 			offset++
-			bytesToWrite--
+			bytesToWrite--		
+			metadata.Window -= 1
 		}
 		end := min(int16(offset+int(metadata.sendBuf.Buf.WindowSize)), int16(offset+(bytesToWrite)))
 		fmt.Println("WindowSize in Write:", metadata.Window)
@@ -474,7 +475,9 @@ func (VConn VTCPConn) VWrite(message string) error {
 			return fmt.Errorf("error sending TCP packet: %w", err)
 		}
 		ok := true
+		fmt.Println("before Here")
 		_, ok = <-metadata.sendBuf.Chan
+		fmt.Println("Here")
 		bytesToWrite -= int(len(dataToSend))
 		offset += int(len(dataToSend))
 		if !ok {

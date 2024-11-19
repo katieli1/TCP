@@ -75,6 +75,7 @@ func REPL() {
 				continue
 			}
 
+
 			orderStruct := fourtupleOrder[entry]
 
 			if orderStruct.VConn == nil {
@@ -92,6 +93,22 @@ func REPL() {
 				}()
 			}
 
+			orderStruct := fourtupleOrder[entry]
+
+			if orderStruct.VConn == nil {
+				// this is a listener entry
+				go func() {
+					listener, exists := listenerTable[orderStruct.Port]
+					if exists {
+
+						listener.VClose()
+					}
+				}()
+			} else {
+				go func() {
+					orderStruct.VConn.VClose()
+				}()
+			}
 		} else if words[0] == "ls" {
 			fmt.Printf("%-10s %-15s %-10s %-15s %-10s %-10s\n", "SID", "LAddr", "LPort", "RAddr", "RPort", "Status")
 			for index, v := range fourtupleOrder {

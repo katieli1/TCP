@@ -445,7 +445,11 @@ func VConnect(addr netip.Addr, port int16) (*VTCPConn, error) {
 }
 
 func (VConn VTCPConn) VWrite(message string) error {
+
 	metadata := connectionTable[VConn]
+	if metadata.State != state.ESTABLISHED {
+		return errors.New("connection state is not established")
+	}
 
 	bytesMessage := []byte(message)
 

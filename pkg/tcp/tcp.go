@@ -22,15 +22,15 @@ import (
 )
 
 type TCPMetadata struct {
-	sendBuf    s.SendBuf
-	receiveBuf s.RecieveBuf
-	Seq        int16
-	Ack        int16
+	sendBuf         s.SendBuf
+	receiveBuf      s.RecieveBuf
+	Seq             int16
+	Ack             int16
 	LastRecievedAck int16
-	Window     int16 // the other person's window size
-	State      state.TCPState
-	Chan       chan bool
-	OutOfOrder map[int16][]byte
+	Window          int16 // the other person's window size
+	State           state.TCPState
+	Chan            chan bool
+	OutOfOrder      map[int16][]byte
 }
 type VTCPConn struct {
 	SourceIp   netip.Addr
@@ -40,10 +40,10 @@ type VTCPConn struct {
 }
 
 type VAcceptInfo struct {
-	Conn *VTCPConn
-	Ack  int16
-	Seq  int16
-	Flags uint8 
+	Conn  *VTCPConn
+	Ack   int16
+	Seq   int16
+	Flags uint8
 }
 
 type VListener struct {
@@ -71,20 +71,21 @@ func Retransmit(conn *TCPMetadata, VConn *VTCPConn) {
 		conn.sendBuf.QueueMutex.RLock()
 		for _, p := range conn.sendBuf.Queue {
 			if p.Seq >= conn.sendBuf.UNA {
-			err := sendTCPPacket(
-				VConn.SourceIp,
-				VConn.DestIp,
-				VConn.SourcePort,
-				VConn.DestPort,
-				p.Seq,
-				conn.Ack,
-				header.TCPFlagAck,
-				p.Data,
-				uint16(conn.receiveBuf.Buf.WindowSize),
-			)
-			if err != nil {
-				fmt.Println("Error sending packet during retransmission")
-			}}
+				err := sendTCPPacket(
+					VConn.SourceIp,
+					VConn.DestIp,
+					VConn.SourcePort,
+					VConn.DestPort,
+					p.Seq,
+					conn.Ack,
+					header.TCPFlagAck,
+					p.Data,
+					uint16(conn.receiveBuf.Buf.WindowSize),
+				)
+				if err != nil {
+					fmt.Println("Error sending packet during retransmission")
+				}
+			}
 		}
 		conn.sendBuf.QueueMutex.RUnlock()
 	}
@@ -95,88 +96,87 @@ func VListen(port int16) *VListener {
 }
 
 func (l *VListener) VAccept() (*VTCPConn, error) {
-    vAcceptInfo, ok := <-l.Chan
-    if !ok {
-        fmt.Println("failed: channel closed")
-        return nil, fmt.Errorf("failed: channel closed")
-    }
-    
-    fourTuple := *vAcceptInfo.Conn
-    rand.Seed(time.Now().UnixNano())
-    min := 1024
-    max := 9998
+	vAcceptInfo, ok := <-l.Chan
+	if !ok {
+		fmt.Println("failed: channel closed")
+		return nil, fmt.Errorf("failed: channel closed")
+	}
 
-    randomSeq := rand.Intn(max-min+1) + min
-    connectionTable[fourTuple] = &TCPMetadata{
-        sendBuf:    s.SendBuf{Buf: buf.Buffer{Head: 0, Len: int16(bufsize), Arr: make([]byte, bufsize), WindowSize: int16(bufsize)}, UNA: 0, Chan: make(chan int16), StartingSeq: randomSeq, Queue: make([]s.Packet, 0)},
-        receiveBuf: s.RecieveBuf{Buf: buf.Buffer{Head: 0, Len: int16(bufsize), Arr: make([]byte, bufsize), WindowSize: int16(bufsize)}, Chan: make(chan int16)},
-        Seq:        vAcceptInfo.Ack,
-        Ack:        vAcceptInfo.Seq + 1,
-        State:      state.SYN_RECEIVED,
-        Window:     int16(bufsize),
+	fourTuple := *vAcceptInfo.Conn
+	rand.Seed(time.Now().UnixNano())
+	min := 1024
+	max := 9998
+
+	randomSeq := rand.Intn(max-min+1) + min
+	connectionTable[fourTuple] = &TCPMetadata{
+		sendBuf:    s.SendBuf{Buf: buf.Buffer{Head: 0, Len: int16(bufsize), Arr: make([]byte, bufsize), WindowSize: int16(bufsize)}, UNA: 0, Chan: make(chan int16), StartingSeq: randomSeq, Queue: make([]s.Packet, 0)},
+		receiveBuf: s.RecieveBuf{Buf: buf.Buffer{Head: 0, Len: int16(bufsize), Arr: make([]byte, bufsize), WindowSize: int16(bufsize)}, Chan: make(chan int16)},
+		Seq:        vAcceptInfo.Ack,
+		Ack:        vAcceptInfo.Seq + 1,
+		State:      state.SYN_RECEIVED,
+		Window:     int16(bufsize),
 		OutOfOrder: make(map[int16][]byte),
-    }
-    fourtupleOrder = append(fourtupleOrder, OrderInfo{0, &fourTuple})
+	}
+	fourtupleOrder = append(fourtupleOrder, OrderInfo{0, &fourTuple})
 
-    // Send the initial SYN-ACK
-    err := sendTCPPacket(fourTuple.SourceIp, fourTuple.DestIp, fourTuple.SourcePort, fourTuple.DestPort, int16(randomSeq), vAcceptInfo.Seq+1, header.TCPFlagSyn|header.TCPFlagAck, nil, uint16(bufsize))
-    if err != nil {
-        return nil, err
-    }
+	// Send the initial SYN-ACK
+	err := sendTCPPacket(fourTuple.SourceIp, fourTuple.DestIp, fourTuple.SourcePort, fourTuple.DestPort, int16(randomSeq), vAcceptInfo.Seq+1, header.TCPFlagSyn|header.TCPFlagAck, nil, uint16(bufsize))
+	if err != nil {
+		return nil, err
+	}
 
-    // Define retransmission timeout and retry limit
-    const retransmitTimeout = 2 * time.Second
-    const maxRetries = 5 // Max retries before failing
-    retryCount := 0
+	// Define retransmission timeout and retry limit
+	const retransmitTimeout = 2 * time.Second
+	const maxRetries = 5 // Max retries before failing
+	retryCount := 0
 
-    for {
-        select {
-        case response, ok := <-l.Chan:
+	for {
+		select {
+		case response, ok := <-l.Chan:
 
+			if !ok {
+				fmt.Println("failed: channel closed")
+				return nil, fmt.Errorf("failed: channel closed")
+			}
 
-            if !ok {
-                fmt.Println("failed: channel closed")
-                return nil, fmt.Errorf("failed: channel closed")
-            }
+			// Handle SYN packet from the other side
+			if response.Flags == header.TCPFlagSyn {
+				err := sendTCPPacket(fourTuple.SourceIp, fourTuple.DestIp, fourTuple.SourcePort, fourTuple.DestPort, int16(randomSeq), vAcceptInfo.Seq+1, header.TCPFlagSyn|header.TCPFlagAck, nil, uint16(bufsize))
+				if err != nil {
+					return nil, fmt.Errorf("error sending SYN-ACK: %v", err)
+				}
+				continue
+			}
 
-            // Handle SYN packet from the other side
-            if response.Flags == header.TCPFlagSyn {
-                err := sendTCPPacket(fourTuple.SourceIp, fourTuple.DestIp, fourTuple.SourcePort, fourTuple.DestPort, int16(randomSeq), vAcceptInfo.Seq+1, header.TCPFlagSyn|header.TCPFlagAck, nil, uint16(bufsize))
-                if err != nil {
-                    return nil, fmt.Errorf("error sending SYN-ACK: %v", err)
-                }
-                continue
-            }
-
-            // Process valid response and establish connection
-            connection := connectionTable[fourTuple]
-            if connection.State == state.SYN_RECEIVED {
-                connection.State = state.ESTABLISHED
+			// Process valid response and establish connection
+			connection := connectionTable[fourTuple]
+			if connection.State == state.SYN_RECEIVED {
+				connection.State = state.ESTABLISHED
 				connection.Seq = int16(randomSeq)
-                // Connection established, stop retransmitting
+				// Connection established, stop retransmitting
 				go Retransmit(connectionTable[fourTuple], &fourTuple)
-                return &fourTuple, nil
-            }
+				return &fourTuple, nil
+			}
 
-        case <-time.After(retransmitTimeout): // Timer expired, retransmit
-            if retryCount >= maxRetries {
-                // Retry limit exceeded, abort connection attempt
-                fmt.Println("Max retries reached, closing connection.")
-                return nil, fmt.Errorf("connection attempt failed after %d retries", maxRetries)
-            }
+		case <-time.After(retransmitTimeout): // Timer expired, retransmit
+			if retryCount >= maxRetries {
+				// Retry limit exceeded, abort connection attempt
+				fmt.Println("Max retries reached, closing connection.")
+				return nil, fmt.Errorf("connection attempt failed after %d retries", maxRetries)
+			}
 
-            // Retransmit the SYN-ACK if we haven't received a valid response
-            fmt.Println("Retransmitting SYN-ACK... Retry count:", retryCount+1)
+			// Retransmit the SYN-ACK if we haven't received a valid response
+			fmt.Println("Retransmitting SYN-ACK... Retry count:", retryCount+1)
 
-            err := sendTCPPacket(fourTuple.SourceIp, fourTuple.DestIp, fourTuple.SourcePort, fourTuple.DestPort, int16(randomSeq), vAcceptInfo.Seq+1, header.TCPFlagSyn|header.TCPFlagAck, nil, uint16(bufsize))
-            if err != nil {
-                return nil, fmt.Errorf("error retransmitting SYN-ACK: %v", err)
-            }
+			err := sendTCPPacket(fourTuple.SourceIp, fourTuple.DestIp, fourTuple.SourcePort, fourTuple.DestPort, int16(randomSeq), vAcceptInfo.Seq+1, header.TCPFlagSyn|header.TCPFlagAck, nil, uint16(bufsize))
+			if err != nil {
+				return nil, fmt.Errorf("error retransmitting SYN-ACK: %v", err)
+			}
 
-            // Increment retry count
-            retryCount++
-        }
-    }
+			// Increment retry count
+			retryCount++
+		}
+	}
 }
 
 func Callback_TCP(msg []byte, source netip.Addr, dest netip.Addr, ttl int) {
@@ -217,6 +217,41 @@ func Callback_TCP(msg []byte, source netip.Addr, dest netip.Addr, ttl int) {
 			return
 		}
 
+		if tcpHdr.Flags == header.TCPFlagFin && connection.State != state.FIN_WAIT_2 { // we are receiving a fin for the first time
+			connection.State = state.CLOSE_WAIT
+			err := sendTCPPacket(c.SourceIp, c.DestIp, c.SourcePort, c.DestPort, connection.Seq, connection.Ack, header.TCPFlagAck, nil, uint16(connection.receiveBuf.Buf.WindowSize))
+			if err != nil {
+				fmt.Println("Err")
+
+			}
+			return
+		}
+
+		if tcpHdr.Flags == header.TCPFlagFin && connection.State == state.FIN_WAIT_2 { // we initiated the FIN
+			connection.State = state.TIME_WAIT
+			err := sendTCPPacket(c.SourceIp, c.DestIp, c.SourcePort, c.DestPort, connection.Seq, connection.Ack, header.TCPFlagAck, nil, uint16(connection.receiveBuf.Buf.WindowSize))
+			if err != nil {
+				fmt.Println("Err")
+			}
+			// wait 2 min, then delete TCB and set state to closed
+			time.Sleep(2 * time.Minute)
+			connection.State = state.CLOSED
+			delete(connectionTable, *c)
+			return
+		}
+
+		if connection.State == state.LAST_ACK {
+			connection.State = state.CLOSED
+			// delete TCB
+			delete(connectionTable, *c)
+			return
+		}
+
+		if connection.State == state.FIN_WAIT_1 {
+			connection.State = state.FIN_WAIT_2
+			return
+		}
+
 		if connection.State == state.SYN_RECEIVED { // Packet from VConnect to unblock VAccept
 			UnblockVAccept(c, &tcpHdr)
 		}
@@ -239,7 +274,7 @@ func Callback_TCP(msg []byte, source netip.Addr, dest netip.Addr, ttl int) {
 						break
 					}
 					//if window size gets to 0 then break out of the loop
-					if windowSize == 0  {
+					if windowSize == 0 {
 						break
 					}
 					delete(connection.OutOfOrder, connection.Ack)
@@ -249,17 +284,16 @@ func Callback_TCP(msg []byte, source netip.Addr, dest netip.Addr, ttl int) {
 					fmt.Println("WindowSize in TCPCallback: ", windowSize)
 				}
 				select {
-					case connection.receiveBuf.Chan <- int16(windowSize):
-						// bytesRead := uint16(min(bytesToRead, connection.receiveBuf.Buf.Len-connection.receiveBuf.Buf.WindowSize))
-						// windowSize = bytesRead + uint16(connection.receiveBuf.Buf.WindowSize)
-					default:
+				case connection.receiveBuf.Chan <- int16(windowSize):
+					// bytesRead := uint16(min(bytesToRead, connection.receiveBuf.Buf.Len-connection.receiveBuf.Buf.WindowSize))
+					// windowSize = bytesRead + uint16(connection.receiveBuf.Buf.WindowSize)
+				default:
 				}
 			} else if tcpHdr.SeqNum > uint32(connection.Ack) { // Out-of-order packet
 				connection.OutOfOrder[int16(tcpHdr.SeqNum)] = tcpPayload
 			}
 
 			// Advertise updated window size
-
 
 			err := sendTCPPacket(c.SourceIp, c.DestIp, c.SourcePort, c.DestPort, connection.Seq, connection.Ack, header.TCPFlagAck, nil, windowSize)
 			if err != nil {
@@ -272,25 +306,25 @@ func Callback_TCP(msg []byte, source netip.Addr, dest netip.Addr, ttl int) {
 
 			// if tcpHdr.AckNum <= uint32(connection.Seq){
 
-				connection.sendBuf.UpdateUNA(int16(tcpHdr.AckNum))
-				diff := tcpHdr.AckNum - uint32(connection.LastRecievedAck)
-				connection.LastRecievedAck = int16(tcpHdr.AckNum)
-				connection.sendBuf.Buf.WindowSize += int16(diff)
-				connection.Window = int16(tcpHdr.WindowSize)
-				connection.sendBuf.QueueMutex.Lock()
-				newQueue := connection.sendBuf.Queue[:0]
-				for _, p := range connection.sendBuf.Queue {
-					if len(p.Data)+int(p.Seq) != int(tcpHdr.AckNum) {
-						newQueue = append(newQueue, p) // Keep packets not yet ACKed
-					}
+			connection.sendBuf.UpdateUNA(int16(tcpHdr.AckNum))
+			diff := tcpHdr.AckNum - uint32(connection.LastRecievedAck)
+			connection.LastRecievedAck = int16(tcpHdr.AckNum)
+			connection.sendBuf.Buf.WindowSize += int16(diff)
+			connection.Window = int16(tcpHdr.WindowSize)
+			connection.sendBuf.QueueMutex.Lock()
+			newQueue := connection.sendBuf.Queue[:0]
+			for _, p := range connection.sendBuf.Queue {
+				if len(p.Data)+int(p.Seq) != int(tcpHdr.AckNum) {
+					newQueue = append(newQueue, p) // Keep packets not yet ACKed
 				}
-				connection.sendBuf.Queue = newQueue
-				connection.sendBuf.QueueMutex.Unlock()
+			}
+			connection.sendBuf.Queue = newQueue
+			connection.sendBuf.QueueMutex.Unlock()
 
-				select {
-				case connection.sendBuf.Chan <- int16(connection.sendBuf.UNA):
-				default:
-				}
+			select {
+			case connection.sendBuf.Chan <- int16(connection.sendBuf.UNA):
+			default:
+			}
 			// }
 		}
 
@@ -304,14 +338,13 @@ func UnblockVAccept(c *VTCPConn, tcpHdr *header.TCPFields) {
 	listenConn, exists := listenerTable[int16(port)]
 	if exists {
 		listenConn.Chan <- &VAcceptInfo{
-			Conn: c,
-			Seq:  int16(tcpHdr.SeqNum),
-			Ack:  int16(tcpHdr.AckNum),
+			Conn:  c,
+			Seq:   int16(tcpHdr.SeqNum),
+			Ack:   int16(tcpHdr.AckNum),
 			Flags: tcpHdr.Flags,
 		}
 	}
 }
-
 
 func ZeroWindowProbing(VConn VTCPConn, toSend byte) { // toSend is a byteslice with one byte
 	fmt.Println("zero window probing")
@@ -424,10 +457,11 @@ func VConnect(addr netip.Addr, port int16) (*VTCPConn, error) {
 	}
 }
 
-
 func (VConn VTCPConn) VWrite(message string) error {
 	metadata := connectionTable[VConn]
-
+	if metadata.State != state.ESTABLISHED {
+		return errors.New("connection state is not established")
+	}
 	bytesMessage := []byte(message)
 
 	data := bytesMessage
@@ -440,7 +474,7 @@ func (VConn VTCPConn) VWrite(message string) error {
 			ZeroWindowProbing(VConn, data[offset])
 			metadata.Seq += 1
 			offset++
-			bytesToWrite--		
+			bytesToWrite--
 			metadata.Window -= 1
 		}
 		end := min(int16(offset+int(metadata.sendBuf.Buf.WindowSize)), int16(offset+(bytesToWrite)))
@@ -487,7 +521,7 @@ func (VConn VTCPConn) VWrite(message string) error {
 	return nil
 }
 
-func (VConn VTCPConn) VRead(buffer []byte) (int16,error) {
+func (VConn VTCPConn) VRead(buffer []byte) (int16, error) {
 	//c := orderStruct.VConn
 
 	metadata := connectionTable[VConn]
@@ -496,19 +530,19 @@ func (VConn VTCPConn) VRead(buffer []byte) (int16,error) {
 	offset := 0
 	// for bytesToRead > 0 {
 
-		bytesCanBeRead := metadata.receiveBuf.Buf.Len - metadata.receiveBuf.Buf.WindowSize
-		if bytesCanBeRead == 0 {
-			<-metadata.receiveBuf.Chan
-			bytesCanBeRead = metadata.receiveBuf.Buf.Len - metadata.receiveBuf.Buf.WindowSize
-		}
-		dataRead := metadata.receiveBuf.Buf.Read(min(bytesToRead, bytesCanBeRead))
+	bytesCanBeRead := metadata.receiveBuf.Buf.Len - metadata.receiveBuf.Buf.WindowSize
+	if bytesCanBeRead == 0 {
+		<-metadata.receiveBuf.Chan
+		bytesCanBeRead = metadata.receiveBuf.Buf.Len - metadata.receiveBuf.Buf.WindowSize
+	}
+	dataRead := metadata.receiveBuf.Buf.Read(min(bytesToRead, bytesCanBeRead))
 
-		copy(buffer[offset:], dataRead)
-		bytesToRead -= int16(len(dataRead))
-		offset += len(dataRead)
+	copy(buffer[offset:], dataRead)
+	bytesToRead -= int16(len(dataRead))
+	offset += len(dataRead)
 	// }
 
-	return int16(len(dataRead)),nil
+	return int16(len(dataRead)), nil
 }
 
 func sendTCPPacket(srcIp, destIp netip.Addr, srcPort, destPort, Seq, Ack int16, flags uint8, data []byte, WindowSize uint16) error {
@@ -642,7 +676,7 @@ func ReceiveFiles(port int16, filePath string) {
 
 	for {
 		// Read data from the connection into the buffer
-		readBytes,err := conn.VRead(buffer)
+		readBytes, err := conn.VRead(buffer)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				break // End of data
@@ -652,7 +686,7 @@ func ReceiveFiles(port int16, filePath string) {
 		}
 
 		if readBytes == 0 {
-			break;
+			break
 		}
 
 		// Write the data to the file
@@ -682,47 +716,53 @@ func min(a, b int16) int16 {
 	return b
 }
 
-// func (VConn VTCPConn) VClose() error {
-    // connection := connectionTable[VConn]
+func (c *VListener) VClose() error {
+	fmt.Println("c: ", c)
+	fmt.Println("c.Port: ", c.Port)
+	_, exists := listenerTable[c.Port]
+	if !exists {
+		return errors.New("Listen socket does not exist")
+	} else {
+		index := -1
+		for i, v := range fourtupleOrder {
+			if v.Port == c.Port {
+				index = i
+				break
+			}
+		}
 
-    // // Step 1: Send FIN
-    // connection.State = state.FIN_WAIT_1
-    // err := sendTCPPacket(VConn.SourceIp, VConn.DestIp, VConn.SourcePort, VConn.DestPort, connection.Seq, connection.Ack, header.TCPFlagFin, nil, connection.Window)
-    // if err != nil {
-    //     return fmt.Errorf("error sending FIN: %v", err)
-    // }
+		// Check if the item was found
+		if index == -1 {
+			return errors.New("not found")
+		}
 
-    // // Step 2: Wait for ACK
-    // for {
-    //     // packet := <-
-    //     if packet. == header.TCPFlagAck {
-    //         connection.State = state.FIN_WAIT_2
-    //         break
-    //     }
-    // }
+		// Remove the item by slicing
+		fourtupleOrder = append(fourtupleOrder[:index], fourtupleOrder[index+1:]...)
+		delete(listenerTable, c.Port)
+	}
+	return nil
+}
 
-    // // Step 3: Wait for peer's FIN
-    // for {
-    //     // packet := <-
-    //     if packet.Flags == header.TCPFlagFin {
-    //         connection.State = state.TIME_WAIT
-    //         // Send ACK for peer's FIN
-    //         err := sendTCPPacket(VConn.SourceIp, VConn.DestIp, VConn.SourcePort, VConn.DestPort, connection.Seq, connection.Ack+1, header.TCPFlagAck, nil, connection.Window)
-    //         if err != nil {
-    //             return fmt.Errorf("error sending ACK: %v", err)
-    //         }
-    //         break
-    //     }
-    // }
+func (c *VTCPConn) VClose() error {
+	metadata := connectionTable[*c]
 
-    // // Step 4: TIME_WAIT timeout
-    // const msl = 30 * time.Second // Example MSL value
-    // time.Sleep(2 * msl)
+	err := sendTCPPacket(c.SourceIp,
+		c.DestIp,
+		c.SourcePort,
+		c.DestPort,
+		metadata.Seq,
+		metadata.Ack,
+		header.TCPFlagFin,
+		nil,
+		uint16(metadata.receiveBuf.Buf.WindowSize))
+	if err != nil {
+		return err
+	}
+	if metadata.State != state.CLOSE_WAIT {
+		metadata.State = state.FIN_WAIT_1
+	} else {
+		metadata.State = state.LAST_ACK
+	}
 
-    // // Step 5: Close connection and clean up
-    // connection.State = state.CLOSED
-    // delete(connectionTable, VConn)
-
-    // return nil
-// }
-
+	return nil
+}

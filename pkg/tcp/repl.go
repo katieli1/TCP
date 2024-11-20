@@ -93,7 +93,7 @@ func REPL() {
 				}()
 			}
 
-			orderStruct := fourtupleOrder[entry]
+			orderStruct = fourtupleOrder[entry]
 
 			if orderStruct.VConn == nil {
 				// this is a listener entry

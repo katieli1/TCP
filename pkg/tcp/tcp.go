@@ -265,38 +265,37 @@ func Callback_TCP(msg []byte, source netip.Addr, dest netip.Addr, ttl int) {
 
 		// Handle data packet
 		if len(tcpPayload) != 0 {
-			fmt.Println("CONN.SEQ ", connection.Seq)
+			// fmt.Println("CONN.SEQ ", connection.Seq)
 			if len(tcpPayload) > int(connection.receiveBuf.Buf.WindowSize) {
 				return
 			}
 			windowSize := uint16(connection.receiveBuf.Buf.WindowSize)
-			fmt.Println("Paquet seq ", tcpHdr.SeqNum, " connection Ack ", connection.Ack)
+			// fmt.Println("Paquet seq ", tcpHdr.SeqNum, " connection Ack ", connection.Ack)
 			if tcpHdr.SeqNum == uint32(connection.Ack) { // In-order packet
-				connection.OutOfOrder[int16(tcpHdr.SeqNum)] = tcpPayload
-				fmt.Println("WindowSize in TCPCallback before for loop: ", windowSize)
+				fmt.Println("data: ", string(tcpPayload))
+				connection.receiveBuf.Buf.Write(tcpPayload) // Write directly to the buffer
+				connection.Ack += int16(len(tcpPayload))  // Advance the acknowledgment number
+				windowSize -= uint16(len(tcpPayload))  
+
 				// Process buffered out-of-order packets
 				for {
 					nextPayload, exists := connection.OutOfOrder[connection.Ack]
-					if !exists {
+					if !exists || len(nextPayload) > int(connection.receiveBuf.Buf.WindowSize) {
 						break
 					}
-					//if window size gets to 0 then break out of the loop
-					if windowSize == 0 {
-						break
-					}
-					delete(connection.OutOfOrder, connection.Ack)
-					connection.receiveBuf.Buf.Write(nextPayload)
-					connection.Ack += int16(len(nextPayload))
-					windowSize = uint16(connection.receiveBuf.Buf.WindowSize)
-					fmt.Println("WindowSize in TCPCallback: ", windowSize)
+					delete(connection.OutOfOrder, connection.Ack)   // Remove from the out-of-order map
+					connection.receiveBuf.Buf.Write(nextPayload)    // Write the buffered payload
+					connection.Ack += int16(len(nextPayload))      // Update acknowledgment number
+					windowSize -= uint16(len(nextPayload))          // Update window size
 				}
+
+				// Unblock read operations
 				select {
-				case connection.receiveBuf.Chan <- int16(windowSize):
-					// bytesRead := uint16(min(bytesToRead, connection.receiveBuf.Buf.Len-connection.receiveBuf.Buf.WindowSize))
-					// windowSize = bytesRead + uint16(connection.receiveBuf.Buf.WindowSize)
+				case connection.receiveBuf.Chan <- int16(connection.receiveBuf.Buf.WindowSize):
 				default:
 				}
 			} else if tcpHdr.SeqNum > uint32(connection.Ack) { // Out-of-order packet
+				fmt.Println("HEre")
 				connection.OutOfOrder[int16(tcpHdr.SeqNum)] = tcpPayload
 			}
 
@@ -313,24 +312,28 @@ func Callback_TCP(msg []byte, source netip.Addr, dest netip.Addr, ttl int) {
 
 			// if tcpHdr.AckNum <= uint32(connection.Seq){
 
-			connection.sendBuf.UpdateUNA(int16(tcpHdr.AckNum))
-			diff := tcpHdr.AckNum - uint32(connection.LastRecievedAck)
-			connection.LastRecievedAck = int16(tcpHdr.AckNum)
-			connection.sendBuf.Buf.WindowSize += int16(diff)
-			connection.Window = int16(tcpHdr.WindowSize)
 			connection.sendBuf.QueueMutex.Lock()
 			newQueue := connection.sendBuf.Queue[:0]
+			newBytesAcked := false
 			for _, p := range connection.sendBuf.Queue {
-				if len(p.Data)+int(p.Seq) != int(tcpHdr.AckNum) {
+				if len(p.Data)+int(p.Seq) > int(tcpHdr.AckNum) {
 					newQueue = append(newQueue, p) // Keep packets not yet ACKed
+				}else{
+					newBytesAcked = true
 				}
 			}
 			connection.sendBuf.Queue = newQueue
 			connection.sendBuf.QueueMutex.Unlock()
-
-			select {
-			case connection.sendBuf.Chan <- int16(connection.sendBuf.UNA):
-			default:
+			if newBytesAcked {
+				connection.sendBuf.UpdateUNA(int16(tcpHdr.AckNum))
+				diff := tcpHdr.AckNum - uint32(connection.LastRecievedAck)
+				connection.LastRecievedAck = int16(tcpHdr.AckNum)
+				connection.sendBuf.Buf.WindowSize += int16(diff)
+				connection.Window = int16(tcpHdr.WindowSize)
+				select {
+				case connection.sendBuf.Chan <- int16(connection.sendBuf.UNA):
+				default:
+				}
 			}
 			// }
 		}
@@ -493,14 +496,15 @@ func (VConn VTCPConn) VWrite(message string) error {
 			metadata.Window -= 1
 		}
 		end := min(int16(offset+int(metadata.sendBuf.Buf.WindowSize)), int16(offset+(bytesToWrite)))
-		fmt.Println("WindowSize in Write:", metadata.Window)
+		end = min(end,int16(offset)+5) //HERE SHOULD BE 1024
+		// fmt.Println("WindowSize in Write:", metadata.Window)
 		if int(metadata.Window) < int(end)-offset {
 			end = int16(offset) + metadata.Window
 		}
-
+		fmt.Println("end: ", end, " offset: ", offset)
 		metadata.sendBuf.Buf.Write(data[offset:end])
 
-		dataToSend := metadata.sendBuf.GetDataToSend()
+		dataToSend := metadata.sendBuf.GetDataToSend(end-int16(offset))
 		fmt.Println("data to send:", string(dataToSend))
 		err := sendTCPPacket(
 			VConn.SourceIp,
@@ -524,9 +528,11 @@ func (VConn VTCPConn) VWrite(message string) error {
 			return fmt.Errorf("error sending TCP packet: %w", err)
 		}
 		ok := true
-		fmt.Println("before Here")
-		_, ok = <-metadata.sendBuf.Chan
-		fmt.Println("Here")
+		// fmt.Println("before Here")
+		if metadata.sendBuf.Buf.WindowSize == 0{
+			_, ok = <-metadata.sendBuf.Chan
+		}
+		// fmt.Println("Here")
 		bytesToWrite -= int(len(dataToSend))
 		offset += int(len(dataToSend))
 		if !ok {

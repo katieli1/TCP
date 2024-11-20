@@ -1,6 +1,7 @@
 package pkgUtils
 
 import (
+	"fmt"
 	buf "ip/pkg/buffer"
 	"sync"
 )
@@ -42,15 +43,17 @@ func (b *SendBuf) UpdateUNA(newPos int16) {
 	// fmt.Println("updating UNA: ", b.UNA)
 }
 
-func (b *SendBuf) GetDataToSend() (data []byte) {
-	// fmt.Println("UNA ", b.UNA)
+func (b *SendBuf) GetDataToSend(length int16) (data []byte) {
+
 	// fmt.Println("head ", b.Buf.Head)
-	if b.UNA < b.Buf.Head {
+pointer := (b.Buf.Head - length + b.Buf.Len) % b.Buf.Len	
+	fmt.Println("pointer ", pointer)
+	if pointer < b.Buf.Head {
 		// fmt.Println("no wraparound")
-		return b.Buf.Arr[b.UNA:b.Buf.Head]
+		return b.Buf.Arr[pointer:b.Buf.Head]
 	} else {
 		// fmt.Println("wraparound")
-		firstChunk := b.Buf.Arr[b.UNA:b.Buf.Len]
+		firstChunk := b.Buf.Arr[pointer:b.Buf.Len]
 		secondChunk := b.Buf.Arr[0:b.Buf.Head]
 		return append(firstChunk, secondChunk...)
 	}

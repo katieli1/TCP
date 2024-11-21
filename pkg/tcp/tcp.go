@@ -66,29 +66,29 @@ func Initialize(fileName string) {
 }
 
 func Retransmit(conn *TCPMetadata, VConn *VTCPConn) {
-	for {
-		time.Sleep(1 * time.Second)
-		conn.sendBuf.QueueMutex.RLock()
-		for _, p := range conn.sendBuf.Queue {
-			if p.Seq >= conn.sendBuf.UNA {
-				err := sendTCPPacket(
-					VConn.SourceIp,
-					VConn.DestIp,
-					VConn.SourcePort,
-					VConn.DestPort,
-					p.Seq,
-					conn.Ack,
-					header.TCPFlagAck,
-					p.Data,
-					uint16(conn.receiveBuf.Buf.WindowSize),
-				)
-				if err != nil {
-					fmt.Println("Error sending packet during retransmission")
-				}
-			}
-		}
-		conn.sendBuf.QueueMutex.RUnlock()
-	}
+	// for {
+	// 	time.Sleep(1 * time.Second)
+	// 	conn.sendBuf.QueueMutex.RLock()
+	// 	for _, p := range conn.sendBuf.Queue {
+	// 		if p.Seq >= conn.sendBuf.UNA {
+	// 			err := sendTCPPacket(
+	// 				VConn.SourceIp,
+	// 				VConn.DestIp,
+	// 				VConn.SourcePort,
+	// 				VConn.DestPort,
+	// 				p.Seq,
+	// 				conn.Ack,
+	// 				header.TCPFlagAck,
+	// 				p.Data,
+	// 				uint16(conn.receiveBuf.Buf.WindowSize),
+	// 			)
+	// 			if err != nil {
+	// 				fmt.Println("Error sending packet during retransmission")
+	// 			}
+	// 		}
+	// 	}
+	// 	conn.sendBuf.QueueMutex.RUnlock()
+	// }
 }
 
 func VListen(port int16) *VListener {
@@ -116,7 +116,6 @@ func (l *VListener) VAccept() (*VTCPConn, error) {
 		State:      state.SYN_RECEIVED,
 		Window:     int16(bufsize),
 		OutOfOrder: make(map[int16][]byte),
-
 	}
 	fourtupleOrder = append(fourtupleOrder, OrderInfo{0, &fourTuple})
 
@@ -134,7 +133,6 @@ func (l *VListener) VAccept() (*VTCPConn, error) {
 	for {
 		select {
 		case response, ok := <-l.Chan:
-
 
 			if !ok {
 				fmt.Println("failed: channel closed")
@@ -167,7 +165,6 @@ func (l *VListener) VAccept() (*VTCPConn, error) {
 				fmt.Println("Max retries reached, closing connection.")
 				return nil, fmt.Errorf("connection attempt failed after %d retries", maxRetries)
 			}
-
 
 			// Retransmit the SYN-ACK if we haven't received a valid response
 			fmt.Println("Retransmitting SYN-ACK... Retry count:", retryCount+1)
@@ -246,7 +243,6 @@ func Callback_TCP(msg []byte, source netip.Addr, dest netip.Addr, ttl int) {
 			return
 		}
 
-
 		if connection.State == state.LAST_ACK {
 			connection.State = state.CLOSED
 			// delete TCB
@@ -266,16 +262,24 @@ func Callback_TCP(msg []byte, source netip.Addr, dest netip.Addr, ttl int) {
 		// Handle data packet
 		if len(tcpPayload) != 0 {
 			// fmt.Println("CONN.SEQ ", connection.Seq)
-			if len(tcpPayload) > int(connection.receiveBuf.Buf.WindowSize) {
+
+			connection.receiveBuf.BufMutex.Lock()
+			fmt.Println("line 266")
+			windowSize := uint16(connection.receiveBuf.Buf.WindowSize)
+			fmt.Println("window size: ", windowSize)
+			if len(tcpPayload) > int(windowSize) {
+				fmt.Println("returning")
+				connection.receiveBuf.BufMutex.Unlock()
 				return
 			}
-			windowSize := uint16(connection.receiveBuf.Buf.WindowSize)
+
 			// fmt.Println("Paquet seq ", tcpHdr.SeqNum, " connection Ack ", connection.Ack)
 			if tcpHdr.SeqNum == uint32(connection.Ack) { // In-order packet
 				fmt.Println("data: ", string(tcpPayload))
 				connection.receiveBuf.Buf.Write(tcpPayload) // Write directly to the buffer
-				connection.Ack += int16(len(tcpPayload))  // Advance the acknowledgment number
-				windowSize -= uint16(len(tcpPayload))  
+
+				connection.Ack += int16(len(tcpPayload)) // Advance the acknowledgment number
+				windowSize -= uint16(len(tcpPayload))
 
 				// Process buffered out-of-order packets
 				for {
@@ -283,11 +287,13 @@ func Callback_TCP(msg []byte, source netip.Addr, dest netip.Addr, ttl int) {
 					if !exists || len(nextPayload) > int(connection.receiveBuf.Buf.WindowSize) {
 						break
 					}
-					delete(connection.OutOfOrder, connection.Ack)   // Remove from the out-of-order map
-					connection.receiveBuf.Buf.Write(nextPayload)    // Write the buffered payload
-					connection.Ack += int16(len(nextPayload))      // Update acknowledgment number
-					windowSize -= uint16(len(nextPayload))          // Update window size
+					delete(connection.OutOfOrder, connection.Ack) // Remove from the out-of-order map
+					connection.receiveBuf.Buf.Write(nextPayload)  // Write the buffered payload
+					connection.Ack += int16(len(nextPayload))     // Update acknowledgment number
+					windowSize -= uint16(len(nextPayload))        // Update window size
 				}
+
+				//connection.receiveBuf.BufMutex.Unlock()
 
 				// Unblock read operations
 				select {
@@ -302,8 +308,10 @@ func Callback_TCP(msg []byte, source netip.Addr, dest netip.Addr, ttl int) {
 			// Advertise updated window size
 
 			err := sendTCPPacket(c.SourceIp, c.DestIp, c.SourcePort, c.DestPort, connection.Seq, connection.Ack, header.TCPFlagAck, nil, windowSize)
+			connection.receiveBuf.BufMutex.Unlock()
 			if err != nil {
 				fmt.Println("Error sending ACK:", err)
+
 				return
 			}
 
@@ -318,23 +326,28 @@ func Callback_TCP(msg []byte, source netip.Addr, dest netip.Addr, ttl int) {
 			for _, p := range connection.sendBuf.Queue {
 				if len(p.Data)+int(p.Seq) > int(tcpHdr.AckNum) {
 					newQueue = append(newQueue, p) // Keep packets not yet ACKed
-				}else{
+				} else {
 					newBytesAcked = true
 				}
 			}
 			connection.sendBuf.Queue = newQueue
 			connection.sendBuf.QueueMutex.Unlock()
 			if newBytesAcked {
+				connection.sendBuf.BufMutex.Lock()
+				fmt.Println("line 332")
 				connection.sendBuf.UpdateUNA(int16(tcpHdr.AckNum))
 				diff := tcpHdr.AckNum - uint32(connection.LastRecievedAck)
 				connection.LastRecievedAck = int16(tcpHdr.AckNum)
 				connection.sendBuf.Buf.WindowSize += int16(diff)
 				connection.Window = int16(tcpHdr.WindowSize)
+
 				select {
 				case connection.sendBuf.Chan <- int16(connection.sendBuf.UNA):
 				default:
 				}
+				connection.sendBuf.BufMutex.Unlock()
 			}
+
 			// }
 		}
 
@@ -343,11 +356,6 @@ func Callback_TCP(msg []byte, source netip.Addr, dest netip.Addr, ttl int) {
 		UnblockVAccept(c, &tcpHdr)
 	}
 }
-
-// func deleteTCB(c *VTCPConn) {
-// 	connectionTable[]
-
-// }
 
 func UnblockVAccept(c *VTCPConn, tcpHdr *header.TCPFields) {
 	port := tcpHdr.DstPort
@@ -487,8 +495,13 @@ func (VConn VTCPConn) VWrite(message string) error {
 	offset := 0
 
 	for bytesToWrite > 0 {
+		metadata.sendBuf.BufMutex.Lock()
+		fmt.Println("line 497")
+		//defer metadata.sendBuf.BufMutex.Unlock()
 		if metadata.Window == 0 {
+
 			metadata.sendBuf.Buf.Write(data[offset : offset+1])
+
 			ZeroWindowProbing(VConn, data[offset])
 			metadata.Seq += 1
 			offset++
@@ -496,7 +509,7 @@ func (VConn VTCPConn) VWrite(message string) error {
 			metadata.Window -= 1
 		}
 		end := min(int16(offset+int(metadata.sendBuf.Buf.WindowSize)), int16(offset+(bytesToWrite)))
-		end = min(end,int16(offset)+5) //HERE SHOULD BE 1024
+		end = min(end, int16(offset)+7) //HERE SHOULD BE 1024
 		// fmt.Println("WindowSize in Write:", metadata.Window)
 		if int(metadata.Window) < int(end)-offset {
 			end = int16(offset) + metadata.Window
@@ -504,7 +517,7 @@ func (VConn VTCPConn) VWrite(message string) error {
 		fmt.Println("end: ", end, " offset: ", offset)
 		metadata.sendBuf.Buf.Write(data[offset:end])
 
-		dataToSend := metadata.sendBuf.GetDataToSend(end-int16(offset))
+		dataToSend := metadata.sendBuf.GetDataToSend(end - int16(offset))
 		fmt.Println("data to send:", string(dataToSend))
 		err := sendTCPPacket(
 			VConn.SourceIp,
@@ -528,9 +541,13 @@ func (VConn VTCPConn) VWrite(message string) error {
 			return fmt.Errorf("error sending TCP packet: %w", err)
 		}
 		ok := true
+
 		// fmt.Println("before Here")
-		if metadata.sendBuf.Buf.WindowSize == 0{
+		if metadata.sendBuf.Buf.WindowSize == 0 {
+			metadata.sendBuf.BufMutex.Unlock()
 			_, ok = <-metadata.sendBuf.Chan
+		} else {
+			metadata.sendBuf.BufMutex.Unlock()
 		}
 		// fmt.Println("Here")
 		bytesToWrite -= int(len(dataToSend))
@@ -538,6 +555,7 @@ func (VConn VTCPConn) VWrite(message string) error {
 		if !ok {
 			fmt.Println("error in sendbuf while loop")
 		}
+
 	}
 	return nil
 }
@@ -550,19 +568,27 @@ func (VConn VTCPConn) VRead(buffer []byte) (int16, error) {
 	bytesToRead := int16(len(buffer))
 	offset := 0
 	// for bytesToRead > 0 {
-
+	metadata.receiveBuf.BufMutex.Lock()
+	fmt.Println("line 566")
 	bytesCanBeRead := metadata.receiveBuf.Buf.Len - metadata.receiveBuf.Buf.WindowSize
+	//metadata.receiveBuf.BufMutex.Unlock()
 	if bytesCanBeRead == 0 {
+		metadata.receiveBuf.BufMutex.Unlock()
 		<-metadata.receiveBuf.Chan
-
+		metadata.receiveBuf.BufMutex.Lock()
+		fmt.Println("line 572")
 		bytesCanBeRead = metadata.receiveBuf.Buf.Len - metadata.receiveBuf.Buf.WindowSize
+		//metadata.receiveBuf.BufMutex.Unlock()
 	}
+	//metadata.receiveBuf.BufMutex.Lock()
+	fmt.Println("line 576")
 	dataRead := metadata.receiveBuf.Buf.Read(min(bytesToRead, bytesCanBeRead))
 
 	copy(buffer[offset:], dataRead)
 	bytesToRead -= int16(len(dataRead))
 	offset += len(dataRead)
 	// }
+	metadata.receiveBuf.BufMutex.Unlock()
 
 	return int16(len(dataRead)), nil
 }
@@ -785,7 +811,6 @@ func (c *VTCPConn) VClose() error {
 	} else {
 		metadata.State = state.LAST_ACK
 	}
-
 
 	return nil
 }

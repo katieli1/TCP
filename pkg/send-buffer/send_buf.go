@@ -13,6 +13,7 @@ type SendBuf struct {
 	StartingSeq int
 	Queue       []Packet // holds all unACKed packets
 	QueueMutex  sync.RWMutex
+	BufMutex    sync.Mutex
 }
 
 type Packet struct {
@@ -21,8 +22,9 @@ type Packet struct {
 }
 
 type RecieveBuf struct {
-	Buf  buf.Buffer
-	Chan chan int16
+	Buf      buf.Buffer
+	Chan     chan int16
+	BufMutex sync.Mutex
 }
 
 func (b *SendBuf) Write(data []byte) {
@@ -46,7 +48,7 @@ func (b *SendBuf) UpdateUNA(newPos int16) {
 func (b *SendBuf) GetDataToSend(length int16) (data []byte) {
 
 	// fmt.Println("head ", b.Buf.Head)
-pointer := (b.Buf.Head - length + b.Buf.Len) % b.Buf.Len	
+	pointer := (b.Buf.Head - length + b.Buf.Len) % b.Buf.Len
 	fmt.Println("pointer ", pointer)
 	if pointer < b.Buf.Head {
 		// fmt.Println("no wraparound")

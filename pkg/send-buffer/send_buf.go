@@ -4,6 +4,7 @@ import (
 	"fmt"
 	buf "ip/pkg/buffer"
 	"sync"
+	"time"
 )
 
 type SendBuf struct {
@@ -17,8 +18,9 @@ type SendBuf struct {
 }
 
 type Packet struct {
-	Seq  int16
-	Data []byte
+	Seq         int16
+	Data        []byte
+	StartTime   time.Time
 }
 
 type RecieveBuf struct {

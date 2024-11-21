@@ -15,6 +15,7 @@ import (
 	"net/netip"
 	"os"
 
+	"math"
 	"time"
 
 	"github.com/google/netstack/tcpip/header"
@@ -31,6 +32,8 @@ type TCPMetadata struct {
 	State           state.TCPState
 	Chan            chan bool
 	OutOfOrder      map[int16][]byte
+	SRTT            time.Duration
+	RTO             time.Duration
 }
 type VTCPConn struct {
 	SourceIp   netip.Addr
@@ -67,7 +70,7 @@ func Initialize(fileName string) {
 
 func Retransmit(conn *TCPMetadata, VConn *VTCPConn) {
 	for {
-		time.Sleep(1 * time.Second)
+		time.Sleep(conn.RTO)
 		conn.sendBuf.QueueMutex.RLock()
 		for _, p := range conn.sendBuf.Queue {
 			if p.Seq >= conn.sendBuf.UNA {
@@ -86,6 +89,11 @@ func Retransmit(conn *TCPMetadata, VConn *VTCPConn) {
 					fmt.Println("Error sending packet during retransmission")
 				}
 			}
+			if conn.RTO < 8 { // TODO: find a better way
+				conn.RTO = 2 * conn.RTO
+			}
+
+			break // break so we only send the top of the queue
 		}
 		conn.sendBuf.QueueMutex.RUnlock()
 	}
@@ -327,6 +335,18 @@ func Callback_TCP(msg []byte, source netip.Addr, dest netip.Addr, ttl int) {
 				if len(p.Data)+int(p.Seq) > int(tcpHdr.AckNum) {
 					newQueue = append(newQueue, p) // Keep packets not yet ACKed
 				} else {
+					// update connection.SRTT based on packet time
+					end := time.Now()
+					elapsed := end.Sub(p.StartTime)
+					srtt := float64(connection.SRTT)
+					el := float64(elapsed)
+
+					connection.SRTT = time.Duration(0.8*srtt + (1-0.8)*el)
+					updatedSrtt := float64(connection.SRTT)
+
+					connection.RTO = time.Duration(math.Max(1000000000, math.Min(0.8*updatedSrtt, float64(connection.RTO))))
+					fmt.Println("rto: ", connection.RTO)
+					fmt.Println("the other one: ", time.Duration(math.Min(0.8*updatedSrtt, float64(connection.RTO))))
 					newBytesAcked = true
 				}
 			}
@@ -341,8 +361,8 @@ func Callback_TCP(msg []byte, source netip.Addr, dest netip.Addr, ttl int) {
 				connection.sendBuf.Buf.WindowSize += int16(diff)
 				connection.Window = int16(tcpHdr.WindowSize)
 				connection.sendBuf.BufMutex.Unlock()
-				if diff >0 {
-				select {
+				if diff > 0 {
+					select {
 					case connection.sendBuf.Chan <- int16(connection.sendBuf.UNA):
 					default:
 					}
@@ -509,7 +529,7 @@ func (VConn VTCPConn) VWrite(message string) error {
 			metadata.Window -= 1
 		}
 		metadata.sendBuf.BufMutex.Lock()
-		println("WindowSize: ",metadata.Window)
+		println("WindowSize: ", metadata.Window)
 		end := min(int16(offset+int(metadata.sendBuf.Buf.WindowSize)), int16(offset+(bytesToWrite)))
 		end = min(end, int16(offset)+7) //HERE SHOULD BE 1024
 		// fmt.Println("WindowSize in Write:", metadata.Window)
@@ -533,7 +553,7 @@ func (VConn VTCPConn) VWrite(message string) error {
 			uint16(metadata.receiveBuf.Buf.WindowSize),
 		)
 		metadata.sendBuf.QueueMutex.Lock()
-		metadata.sendBuf.Queue = append(metadata.sendBuf.Queue, s.Packet{Seq: metadata.Seq, Data: dataToSend})
+		metadata.sendBuf.Queue = append(metadata.sendBuf.Queue, s.Packet{Seq: metadata.Seq, Data: dataToSend, StartTime: time.Now()})
 		metadata.sendBuf.QueueMutex.Unlock()
 
 		metadata.Seq += end - int16(offset)

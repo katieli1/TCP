@@ -31,6 +31,7 @@ type TCPMetadata struct {
 	Window          int16 // the other person's window size
 	State           state.TCPState
 	Chan            chan bool
+	CallBackChan    chan CallBackStruct
 	OutOfOrder      map[int16][]byte
 	SRTT            time.Duration
 	RTO             time.Duration
@@ -58,7 +59,12 @@ type OrderInfo struct {
 	VConn *VTCPConn
 }
 
-var fourtupleOrder []OrderInfo
+type CallBackStruct struct {
+	header     header.TCPFields
+	tcpPayload []byte
+}
+
+var fourtupleOrder = make(map[int]*OrderInfo)
 
 var connectionTable = make(map[VTCPConn]*TCPMetadata)
 var listenerTable = make(map[int16]*VListener)
@@ -119,16 +125,18 @@ func (l *VListener) VAccept() (*VTCPConn, error) {
 
 	randomSeq := rand.Intn(max-min+1) + min
 	connectionTable[fourTuple] = &TCPMetadata{
-		sendBuf:    s.SendBuf{Buf: buf.Buffer{Head: 0, Len: int16(bufsize), Arr: make([]byte, bufsize), WindowSize: int16(bufsize)}, UNA: 0, Chan: make(chan int16), StartingSeq: randomSeq, Queue: make([]s.Packet, 0)},
-		receiveBuf: s.RecieveBuf{Buf: buf.Buffer{Head: 0, Len: int16(bufsize), Arr: make([]byte, bufsize), WindowSize: int16(bufsize)}, Chan: make(chan int16)},
-		Seq:        vAcceptInfo.Ack,
-		Ack:        vAcceptInfo.Seq + 1,
-		State:      state.SYN_RECEIVED,
-		Window:     int16(bufsize),
-		OutOfOrder: make(map[int16][]byte),
-		RTO:        1 * time.Second,
+		sendBuf:      s.SendBuf{Buf: buf.Buffer{Head: 0, Len: int16(bufsize), Arr: make([]byte, bufsize), WindowSize: int16(bufsize)}, UNA: 0, Chan: make(chan int16), StartingSeq: randomSeq, Queue: make([]s.Packet, 0)},
+		receiveBuf:   s.RecieveBuf{Buf: buf.Buffer{Head: 0, Len: int16(bufsize), Arr: make([]byte, bufsize), WindowSize: int16(bufsize)}, Chan: make(chan int16)},
+		Seq:          vAcceptInfo.Ack,
+		Ack:          vAcceptInfo.Seq + 1,
+		State:        state.SYN_RECEIVED,
+		Window:       int16(bufsize),
+		OutOfOrder:   make(map[int16][]byte),
+		RTO:          1 * time.Second,
+		CallBackChan: make(chan CallBackStruct),
 	}
-	fourtupleOrder = append(fourtupleOrder, OrderInfo{0, &fourTuple})
+	fourtupleOrder[len(fourtupleOrder)+1] = &OrderInfo{0, &fourTuple}
+	go fourTuple.processPacket()
 
 	// Send the initial SYN-ACK
 	err := sendTCPPacket(fourTuple.SourceIp, fourTuple.DestIp, fourTuple.SourcePort, fourTuple.DestPort, int16(randomSeq), vAcceptInfo.Seq+1, header.TCPFlagSyn|header.TCPFlagAck, nil, uint16(bufsize))
@@ -163,10 +171,10 @@ func (l *VListener) VAccept() (*VTCPConn, error) {
 			connection := connectionTable[fourTuple]
 			if connection.State == state.SYN_RECEIVED {
 				connection.State = state.ESTABLISHED
-				connection.Seq = int16(randomSeq)
+				connection.Seq = int16(randomSeq + 1)
 
 				// Connection established, stop retransmitting
-				go Retransmit(connectionTable[fourTuple], &fourTuple)
+				// go Retransmit(connectionTable[fourTuple], &fourTuple)
 				return &fourTuple, nil
 			}
 
@@ -219,6 +227,22 @@ func Callback_TCP(msg []byte, source netip.Addr, dest netip.Addr, ttl int) {
 	connection, exists := connectionTable[*c]
 
 	if exists {
+		//call process packet
+		fmt.Println("In exist")
+		connection.CallBackChan <- CallBackStruct{header: tcpHdr, tcpPayload: tcpPayload}
+	} else { // No existing connection
+
+		UnblockVAccept(c, &tcpHdr)
+	}
+}
+
+func (c *VTCPConn) processPacket() {
+	connection := connectionTable[*c]
+	for {
+		CallBackStruct := <-connection.CallBackChan
+		fmt.Println("AISUDHASIUDHUi")
+		tcpHdr := CallBackStruct.header
+		tcpPayload := CallBackStruct.tcpPayload
 		connection.Window = int16(tcpHdr.WindowSize)
 
 		if tcpHdr.Flags == header.TCPFlagSyn|header.TCPFlagAck { // Packet from VAccept to unblock VConn
@@ -226,7 +250,7 @@ func Callback_TCP(msg []byte, source netip.Addr, dest netip.Addr, ttl int) {
 			connection.Ack = int16(tcpHdr.SeqNum + 1)
 			connection.LastRecievedAck = int16(tcpHdr.AckNum)
 			connection.Chan <- true
-			return
+			continue
 		}
 
 		if tcpHdr.Flags == header.TCPFlagFin && connection.State != state.FIN_WAIT_2 { // we are receiving a fin for the first time
@@ -237,7 +261,7 @@ func Callback_TCP(msg []byte, source netip.Addr, dest netip.Addr, ttl int) {
 				fmt.Println("Err")
 
 			}
-			return
+			continue
 
 		}
 
@@ -251,19 +275,19 @@ func Callback_TCP(msg []byte, source netip.Addr, dest netip.Addr, ttl int) {
 			time.Sleep(2 * time.Minute)
 			connection.State = state.CLOSED
 			delete(connectionTable, *c)
-			return
+			continue
 		}
 
 		if connection.State == state.LAST_ACK {
 			connection.State = state.CLOSED
 			// delete TCB
 			delete(connectionTable, *c)
-			return
+			continue
 		}
 
 		if connection.State == state.FIN_WAIT_1 {
 			connection.State = state.FIN_WAIT_2
-			return
+			continue
 		}
 
 		if connection.State == state.SYN_RECEIVED { // Packet from VConnect to unblock VAccept
@@ -281,7 +305,7 @@ func Callback_TCP(msg []byte, source netip.Addr, dest netip.Addr, ttl int) {
 			if len(tcpPayload) > int(windowSize) {
 				fmt.Println("returning")
 				connection.receiveBuf.BufMutex.Unlock()
-				return
+				continue
 			}
 
 			// fmt.Println("Paquet seq ", tcpHdr.SeqNum, " connection Ack ", connection.Ack)
@@ -312,7 +336,6 @@ func Callback_TCP(msg []byte, source netip.Addr, dest netip.Addr, ttl int) {
 				default:
 				}
 			} else if tcpHdr.SeqNum > uint32(connection.Ack) { // Out-of-order packet
-				fmt.Println("HEre")
 				connection.OutOfOrder[int16(tcpHdr.SeqNum)] = tcpPayload
 			}
 
@@ -357,7 +380,6 @@ func Callback_TCP(msg []byte, source netip.Addr, dest netip.Addr, ttl int) {
 			connection.sendBuf.QueueMutex.Unlock()
 			if newBytesAcked {
 				connection.sendBuf.BufMutex.Lock()
-				fmt.Println("line 332")
 				connection.sendBuf.UpdateUNA(int16(tcpHdr.AckNum))
 				diff := tcpHdr.AckNum - uint32(connection.LastRecievedAck)
 				connection.LastRecievedAck = int16(tcpHdr.AckNum)
@@ -371,13 +393,7 @@ func Callback_TCP(msg []byte, source netip.Addr, dest netip.Addr, ttl int) {
 					}
 				}
 			}
-
-			// }
 		}
-
-	} else { // No existing connection
-
-		UnblockVAccept(c, &tcpHdr)
 	}
 }
 
@@ -448,16 +464,18 @@ func VConnect(addr netip.Addr, port int16) (*VTCPConn, error) {
 
 	// Add entry to connectionTable
 	connectionTable[*c] = &TCPMetadata{
-		sendBuf:    s.SendBuf{Buf: buf.Buffer{Head: 0, Len: int16(bufsize), Arr: make([]byte, bufsize), WindowSize: int16(bufsize)}, UNA: 0, Chan: make(chan int16), StartingSeq: randomSeq, Queue: make([]s.Packet, 0)},
-		receiveBuf: s.RecieveBuf{Buf: buf.Buffer{Head: 0, Len: int16(bufsize), Arr: make([]byte, bufsize), WindowSize: int16(bufsize)}, Chan: make(chan int16)},
-		State:      state.SYN_SENT,
-		Window:     int16(bufsize),
-		Chan:       ch,
-		OutOfOrder: make(map[int16][]byte),
-		RTO:        1 * time.Second,
+		sendBuf:      s.SendBuf{Buf: buf.Buffer{Head: 0, Len: int16(bufsize), Arr: make([]byte, bufsize), WindowSize: int16(bufsize)}, UNA: 0, Chan: make(chan int16), StartingSeq: randomSeq, Queue: make([]s.Packet, 0)},
+		receiveBuf:   s.RecieveBuf{Buf: buf.Buffer{Head: 0, Len: int16(bufsize), Arr: make([]byte, bufsize), WindowSize: int16(bufsize)}, Chan: make(chan int16)},
+		State:        state.SYN_SENT,
+		Window:       int16(bufsize),
+		Chan:         ch,
+		CallBackChan: make(chan CallBackStruct),
+		OutOfOrder:   make(map[int16][]byte),
+		RTO:          1 * time.Second,
 	}
 
-	fourtupleOrder = append(fourtupleOrder, OrderInfo{0, c})
+	fourtupleOrder[len(fourtupleOrder)+1] = &OrderInfo{0, c}
+	go c.processPacket()
 
 	// Retransmission timeout duration and retry limit
 	const retransmitTimeout = 3 * time.Second
@@ -481,7 +499,7 @@ func VConnect(addr netip.Addr, port int16) (*VTCPConn, error) {
 				fmt.Println("Error sending ACK:", err)
 				return nil, err
 			}
-			go Retransmit(connectionTable[*c], c)
+			// go Retransmit(connectionTable[*c], c)
 			// Return the connection information after sending the ACK
 			return c, nil
 
@@ -595,19 +613,19 @@ func (VConn VTCPConn) VRead(buffer []byte) (int16, error) {
 	offset := 0
 	// for bytesToRead > 0 {
 	metadata.receiveBuf.BufMutex.Lock()
-	fmt.Println("line 566")
+	// fmt.Println("line 566")
 	bytesCanBeRead := metadata.receiveBuf.Buf.Len - metadata.receiveBuf.Buf.WindowSize
 	//metadata.receiveBuf.BufMutex.Unlock()
 	if bytesCanBeRead == 0 {
 		metadata.receiveBuf.BufMutex.Unlock()
 		<-metadata.receiveBuf.Chan
 		metadata.receiveBuf.BufMutex.Lock()
-		fmt.Println("line 572")
+		// fmt.Println("line 572")
 		bytesCanBeRead = metadata.receiveBuf.Buf.Len - metadata.receiveBuf.Buf.WindowSize
 		//metadata.receiveBuf.BufMutex.Unlock()
 	}
 	//metadata.receiveBuf.BufMutex.Lock()
-	fmt.Println("line 576")
+	// fmt.Println("line 576")
 	dataRead := metadata.receiveBuf.Buf.Read(min(bytesToRead, bytesCanBeRead))
 
 	copy(buffer[offset:], dataRead)
@@ -726,7 +744,7 @@ func ReceiveFiles(port int16, filePath string) {
 	// Start listening on the specified port
 	listenConn := VListen(port)
 	listenerTable[port] = listenConn
-	fourtupleOrder = append(fourtupleOrder, OrderInfo{port, nil})
+	fourtupleOrder[len(fourtupleOrder)+1] = &OrderInfo{port, nil}
 
 	// Accept the incoming connection
 	conn, err := listenConn.VAccept()
@@ -811,7 +829,7 @@ func (c *VListener) VClose() error {
 		}
 
 		// Remove the item by slicing
-		fourtupleOrder = append(fourtupleOrder[:index], fourtupleOrder[index+1:]...)
+		delete(fourtupleOrder, index)
 		delete(listenerTable, c.Port)
 	}
 	return nil

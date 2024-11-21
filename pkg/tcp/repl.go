@@ -55,7 +55,7 @@ func REPL() {
 			}
 
 			message := strings.Join(words[2:], " ")
-			orderStruct := fourtupleOrder[entry]
+			orderStruct := fourtupleOrder[int(entry)]
 
 			if orderStruct.VConn == nil {
 				// Cannot send message to a listener entry
@@ -76,7 +76,7 @@ func REPL() {
 			}
 
 
-			orderStruct := fourtupleOrder[entry]
+			orderStruct := fourtupleOrder[int(entry)]
 
 			if orderStruct.VConn == nil {
 				// this is a listener entry
@@ -93,7 +93,7 @@ func REPL() {
 				}()
 			}
 
-			orderStruct = fourtupleOrder[entry]
+			orderStruct = fourtupleOrder[int(entry)]
 
 			if orderStruct.VConn == nil {
 				// this is a listener entry
@@ -180,7 +180,7 @@ func REPL() {
 			}
 
 			buffer := make([]byte, bytesToRead)
-			orderStruct := fourtupleOrder[int16(ID)]
+			orderStruct := fourtupleOrder[int(ID)]
 
 			if orderStruct.VConn == nil {
 				// Cannot send message to a listener entry
@@ -201,7 +201,7 @@ func REPL() {
 func ACommand(port int16) {
 	listenConn := VListen(port)
 	listenerTable[port] = listenConn
-	fourtupleOrder = append(fourtupleOrder, OrderInfo{port, nil})
+	fourtupleOrder[len(fourtupleOrder)+1] = &OrderInfo{port, nil}
 
 	for {
 		_, err := listenConn.VAccept()

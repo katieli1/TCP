@@ -1,1 +1,1 @@
-This implementation mentation 
+This implementation will reliably handle receiving files over your custom VTCPConn and write them to the specified file path. Adjust buffer size or error messages based on your specific requirements.

@@ -66,29 +66,29 @@ func Initialize(fileName string) {
 }
 
 func Retransmit(conn *TCPMetadata, VConn *VTCPConn) {
-	// for {
-	// 	time.Sleep(1 * time.Second)
-	// 	conn.sendBuf.QueueMutex.RLock()
-	// 	for _, p := range conn.sendBuf.Queue {
-	// 		if p.Seq >= conn.sendBuf.UNA {
-	// 			err := sendTCPPacket(
-	// 				VConn.SourceIp,
-	// 				VConn.DestIp,
-	// 				VConn.SourcePort,
-	// 				VConn.DestPort,
-	// 				p.Seq,
-	// 				conn.Ack,
-	// 				header.TCPFlagAck,
-	// 				p.Data,
-	// 				uint16(conn.receiveBuf.Buf.WindowSize),
-	// 			)
-	// 			if err != nil {
-	// 				fmt.Println("Error sending packet during retransmission")
-	// 			}
-	// 		}
-	// 	}
-	// 	conn.sendBuf.QueueMutex.RUnlock()
-	// }
+	for {
+		time.Sleep(1 * time.Second)
+		conn.sendBuf.QueueMutex.RLock()
+		for _, p := range conn.sendBuf.Queue {
+			if p.Seq >= conn.sendBuf.UNA {
+				err := sendTCPPacket(
+					VConn.SourceIp,
+					VConn.DestIp,
+					VConn.SourcePort,
+					VConn.DestPort,
+					p.Seq,
+					conn.Ack,
+					header.TCPFlagAck,
+					p.Data,
+					uint16(conn.receiveBuf.Buf.WindowSize),
+				)
+				if err != nil {
+					fmt.Println("Error sending packet during retransmission")
+				}
+			}
+		}
+		conn.sendBuf.QueueMutex.RUnlock()
+	}
 }
 
 func VListen(port int16) *VListener {
@@ -340,12 +340,13 @@ func Callback_TCP(msg []byte, source netip.Addr, dest netip.Addr, ttl int) {
 				connection.LastRecievedAck = int16(tcpHdr.AckNum)
 				connection.sendBuf.Buf.WindowSize += int16(diff)
 				connection.Window = int16(tcpHdr.WindowSize)
-
-				select {
-				case connection.sendBuf.Chan <- int16(connection.sendBuf.UNA):
-				default:
-				}
 				connection.sendBuf.BufMutex.Unlock()
+				if diff >0 {
+				select {
+					case connection.sendBuf.Chan <- int16(connection.sendBuf.UNA):
+					default:
+					}
+				}
 			}
 
 			// }
@@ -495,7 +496,6 @@ func (VConn VTCPConn) VWrite(message string) error {
 	offset := 0
 
 	for bytesToWrite > 0 {
-		metadata.sendBuf.BufMutex.Lock()
 		fmt.Println("line 497")
 		//defer metadata.sendBuf.BufMutex.Unlock()
 		if metadata.Window == 0 {
@@ -508,12 +508,14 @@ func (VConn VTCPConn) VWrite(message string) error {
 			bytesToWrite--
 			metadata.Window -= 1
 		}
+		metadata.sendBuf.BufMutex.Lock()
+		println("WindowSize: ",metadata.Window)
 		end := min(int16(offset+int(metadata.sendBuf.Buf.WindowSize)), int16(offset+(bytesToWrite)))
 		end = min(end, int16(offset)+7) //HERE SHOULD BE 1024
 		// fmt.Println("WindowSize in Write:", metadata.Window)
-		if int(metadata.Window) < int(end)-offset {
-			end = int16(offset) + metadata.Window
-		}
+		// if int(metadata.Window) < int(end)-offset {
+		// 	end = int16(offset) + metadata.Window
+		// }
 		fmt.Println("end: ", end, " offset: ", offset)
 		metadata.sendBuf.Buf.Write(data[offset:end])
 

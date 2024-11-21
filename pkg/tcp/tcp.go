@@ -70,7 +70,9 @@ func Initialize(fileName string) {
 
 func Retransmit(conn *TCPMetadata, VConn *VTCPConn) {
 	for {
+		//fmt.Println("conn.RTO is ", conn.RTO)
 		time.Sleep(conn.RTO)
+		//time.Sleep(1 * time.Second)
 		conn.sendBuf.QueueMutex.RLock()
 		for _, p := range conn.sendBuf.Queue {
 			if p.Seq >= conn.sendBuf.UNA {
@@ -124,6 +126,7 @@ func (l *VListener) VAccept() (*VTCPConn, error) {
 		State:      state.SYN_RECEIVED,
 		Window:     int16(bufsize),
 		OutOfOrder: make(map[int16][]byte),
+		RTO:        1 * time.Second,
 	}
 	fourtupleOrder = append(fourtupleOrder, OrderInfo{0, &fourTuple})
 
@@ -451,6 +454,7 @@ func VConnect(addr netip.Addr, port int16) (*VTCPConn, error) {
 		Window:     int16(bufsize),
 		Chan:       ch,
 		OutOfOrder: make(map[int16][]byte),
+		RTO:        1 * time.Second,
 	}
 
 	fourtupleOrder = append(fourtupleOrder, OrderInfo{0, c})

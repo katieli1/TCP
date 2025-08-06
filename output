@@ -1,1 +1,0 @@
-This implementation will reliably handle receiving files over your custom VTCPConn and write them to the specified file path. Ad
